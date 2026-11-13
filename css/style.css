@@ -37,7 +37,7 @@ small, .hint { color: var(--muted); font-size: 13px; }
 .card > h3:first-child { margin-top: 0; }
 
 .eyebrow { font: 600 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
-.page-ref { font-family: var(--mono); color: var(--muted); }
+.page-ref { font-family: var(--mono), monospace; color: var(--muted); }
 .reminders { margin: 0 0 14px; padding-left: 18px; }
 .reminders li { margin-bottom: 4px; }
 
@@ -62,7 +62,7 @@ input, select, textarea {
 }
 textarea { resize: vertical; margin-bottom: 8px; display: block; }
 input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; vertical-align: -5px; margin: 0 6px 0 0; accent-color: var(--accent); }
-input[type="number"] { width: 76px; font-family: var(--mono); }
+input[type="number"] { width: 76px; font-family: var(--mono), monospace; }
 label { display: block; }
 .form label { margin-bottom: 10px; color: var(--muted); font-size: 13px; }
 /* 16px: iOS Safari zooms the page when a focused input has a smaller font */
@@ -102,7 +102,7 @@ label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted)
 
 .post-member { border-top: 1px solid var(--line); padding: 10px 0 2px; }
 .injury select { flex: 1; min-width: 0; }
-.outcome { color: var(--accent); font-family: var(--mono); font-size: 14px; min-height: 1em; }
+.outcome { color: var(--accent); font-family: var(--mono), monospace; font-size: 14px; min-height: 1em; }
 
 .map, .log, .plain { list-style: none; margin: 0; padding: 0; }
 .map li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }

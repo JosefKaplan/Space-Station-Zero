@@ -91,8 +91,8 @@ build step for ~500 lines of UI.
 
 ## 5. Data model
 
-```js
-// localStorage key "ssz-captains-log"
+```text
+// localStorage key (shape sketch, not runnable code) "ssz-captains-log"
 {
   schemaVersion: 2,
   station: {                       // survives across crews
