@@ -393,7 +393,7 @@ function render() {
     return;
   }
   const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, settings: renderSettings };
-  appElement.innerHTML = `<header><h1>Captain's Log</h1><span>Space Station Zero</span></header>
+  appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div></header>
     <main>
       ${ui.errorMessage ? `<p class="error" role="alert">${escapeHtml(ui.errorMessage)}</p>` : ''}
       ${ui.noticeMessage ? `<p class="notice">${escapeHtml(ui.noticeMessage)}</p>` : ''}
