@@ -142,6 +142,25 @@ label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted)
 .log, .plain { list-style: none; margin: 0; padding: 0; }
 .log li:first-child { border-top: 0; }
 
+.setup-steps { margin: 0 0 14px; padding-left: 22px; }
+.setup-steps > li { margin-bottom: 12px; padding-left: 4px; }
+.setup-steps > li::marker { color: var(--accent); font: 800 18px var(--display); }
+.setup-steps button { display: block; margin-top: 8px; }
+.terrain-board { display: block; width: 100%; max-width: 340px; height: auto; margin: 10px 0; user-select: none; -webkit-user-select: none; }
+.board-edge { fill: #07061a; stroke: var(--line); stroke-width: 2; }
+.quadrant-line { fill: none; stroke: var(--pink); stroke-width: 1.5; stroke-dasharray: 6 5; opacity: .7; }
+.terrain-piece { cursor: pointer; }
+.terrain-shadow { fill: var(--ink); }
+.terrain-box { fill: var(--panel-raised); stroke: var(--accent); stroke-width: 1.5; }
+.terrain-piece.small .terrain-box { fill: #14433f; stroke: var(--ok); }
+.terrain-piece text { fill: var(--text); font: 800 22px var(--display), sans-serif; text-anchor: middle; dominant-baseline: central; }
+.terrain-piece.small text { font-size: 13px; }
+.terrain-quadrant { color: var(--pink); font: 700 12px var(--mono), monospace; letter-spacing: .1em; text-transform: uppercase; }
+.terrain-list > li { margin-bottom: 6px; }
+.terrain-list .plain li { display: flex; gap: 8px; padding: 1px 0; }
+.terrain-list .plain b { min-width: 1.2ch; color: var(--accent); }
+.terrain-where { margin-left: auto; font-family: var(--mono), monospace; font-size: 14px; color: var(--muted); }
+
 /* station map: the darkest surface in the app — a maintenance display in an unlit corridor */
 .map-card { background: #07061a; }
 .station-map { display: block; width: 100%; height: auto; margin-bottom: 8px; border: 2px solid var(--ink); border-radius: 4px;

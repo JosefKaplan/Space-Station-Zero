@@ -4,9 +4,10 @@ import {
   COMMANDER_FREE_STAT_POINTS, CREW_ADVANCEMENTS, CREW_TYPES, INJURY_ROLL_MAX, INJURY_ROLL_MIN, MAX_LEGACY_COUNT,
   SHIP_TYPES, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, injuryOutcomeForRoll,
 } from './data.js';
+import { isValidTerrain } from './terrain.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MEMBER_STATUSES = ['active', 'recovering', 'dead'];
 
 export function createEmptyState() {
@@ -51,6 +52,12 @@ function migrateFromVersion2(saved) {
   saved.schemaVersion = 3;
 }
 
+// v3 had no set-up step before a challenge; a crew already in a room is treated as having started it
+function migrateFromVersion3(saved) {
+  if (saved.run) saved.run.roomSetup = { isMissionStarted: true, terrain: null };
+  saved.schemaVersion = 4;
+}
+
 function requireValid(condition, what) {
   if (!condition) throw new Error(`Save data is damaged: ${what}.`);
 }
@@ -92,17 +99,20 @@ function assertValidState(saved) {
   requireValid(isChallengeList(run.cleared) && isChallengeList(run.sealed), 'cleared or sealed challenges');
   requireValid(isChallengeList(run.route) && run.route.at(-1) === run.currentChallenge, 'route');
   requireValid([null, 'lost', 'victory'].includes(run.ended), 'campaign ending');
+  requireValid(isPlainObject(run.roomSetup) && typeof run.roomSetup.isMissionStarted === 'boolean'
+    && (run.roomSetup.terrain === null || isValidTerrain(run.roomSetup.terrain)), 'room set-up');
   requireValid(Array.isArray(run.log) && run.log.every((entry) => isPlainObject(entry) && isChallengeNumber(entry.challenge)
     && typeof entry.at === 'string' && typeof entry.text === 'string' && typeof entry.isNote === 'boolean'), 'log');
 }
 
 export function parseSavedState(text) {
   const saved = JSON.parse(text);
-  if (!isPlainObject(saved) || ![1, 2, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+  if (!isPlainObject(saved) || ![1, 2, 3, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
   if (saved.schemaVersion === 2) migrateFromVersion2(saved);
+  if (saved.schemaVersion === 3) migrateFromVersion3(saved);
   assertValidState(saved);
   return saved;
 }
@@ -123,6 +133,11 @@ export function isCurrentChallengeCleared(run) {
 // a room can only be left once cleared, so the rooms seen so far are the cleared ones plus the current one
 export function visitedChallenges(run) {
   return isCurrentChallengeCleared(run) ? run.cleared : [...run.cleared, run.currentChallenge];
+}
+
+// every room starts with the table still to be laid out
+function newRoomSetup() {
+  return { isMissionStarted: false, terrain: null };
 }
 
 function newId() {
@@ -174,6 +189,7 @@ export function startNewCrew(state, { name, size, shipType, edge, agenda, comman
   state.run = {
     crew: { name: name || 'Unnamed crew', size, shipType, edge, agenda, members },
     currentChallenge: STARTING_CHALLENGE, route: [STARTING_CHALLENGE], cleared: [], sealed: [], log: [], ended: null,
+    roomSetup: newRoomSetup(),
   };
   addLogEntry(state.run, `${state.run.crew.name} leaves Dock Zero.`);
 }
@@ -306,6 +322,7 @@ export function moveToChallenge(run, destination, viaLabel) {
   addLogEntry(run, `${viaLabel} → Challenge ${destination}.`);
   run.currentChallenge = destination;
   run.route.push(destination);
+  run.roomSetup = newRoomSetup();
 }
 
 export function retireCrew(state) {

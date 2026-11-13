@@ -109,6 +109,18 @@ export const DICE_HELP = [
     answer: 'Attacker and defender both roll Combat. See p. 20.' },
 ];
 
+// General terrain, p. 43–44: one d12 per quadrant of the board. The board is drawn upright: 22" across, 30" deep.
+export const BOARD_WIDTH_INCHES = 22;
+export const BOARD_HEIGHT_INCHES = 30;
+export const LARGE_TERRAIN_INCHES = 5;
+export const SMALL_TERRAIN_INCHES = 2;
+export const TERRAIN_MIN_GAP_INCHES = 2;
+export const RANDOM_TERRAIN_TABLE = [
+  { max: 4, largePieces: 1, smallPiecesDieSides: 0 },
+  { max: 8, largePieces: 2, smallPiecesDieSides: 0 },
+  { max: 12, largePieces: 2, smallPiecesDieSides: 3 },
+];
+
 // p. 41
 export const XP_PER_SURVIVED_CHALLENGE = 1;
 export const COMMANDER_BONUS_XP_PER_CHALLENGE = 1;

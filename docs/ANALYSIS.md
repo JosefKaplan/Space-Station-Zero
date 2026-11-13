@@ -69,7 +69,7 @@ One screen per job, bottom tab bar, phone-first.
 
 ## 3. Out of scope (YAGNI)
 
-- Enemy AI, combat resolution, maps, terrain generation, turn/initiative tracking.
+- Enemy AI, combat resolution, the book's room maps, turn/initiative tracking.
 - Rule text, ability descriptions, crew-building validation.
 - Skirmish mode, co-op with multiple rosters (one roster per save; co-op players each open the app).
 - Accounts, cloud sync, PWA/service worker. Revisit only if actually missed.
@@ -96,7 +96,7 @@ build step for ~500 lines of UI.
 ```text
 // localStorage key (shape sketch, not runnable code) "ssz-captains-log"
 {
-  schemaVersion: 3,
+  schemaVersion: 4,
   station: {                       // survives across crews
     agendaProgress: { data: 1 },   // parts found by any crew
     legacyCount: 0,                // campaign-wide unlock, capped in data.js
@@ -113,6 +113,10 @@ build step for ~500 lines of UI.
     cleared: [],                   // challenge numbers; "is the current room cleared" and "visited" derive from it
     sealed: [],                    // rooms behind a No Return room, unreachable
     ended: null,                   // null | "lost" | "victory"
+    roomSetup: {                   // the current room's table; reset on entering a room
+      isMissionStarted: false,     // false = still on the set-up step
+      terrain: null                // or { quadrantRolls: [4 × d12], pieces: [{ quadrant, size, x, y }] } in inches
+    },
     log: [{ challenge, at, text, isNote }]
   }
 }
@@ -160,7 +164,26 @@ entries and notes. Room names are shown only for rooms a crew has reached.
 4. `js/app.js`: map card on the Journey tab (also shown with no crew aboard, as ghosts only) and the room panel.
 5. Not built: pan/zoom, room names on the map itself, per-crew colours, hand-drawn annotations.
 
-## 7. Implementation steps
+## 7. Room set-up and general terrain
+
+Entering an uncleared room opens a set-up step before play, in the book's own order (p. 43–44): read the
+briefing, lay out the room's map, add general terrain, place the crew last. "Begin challenge" moves on to the
+in-progress view; "Room set-up" there goes back, so the sketch stays reachable during play.
+
+General terrain (`js/terrain.js`, table and sizes in `js/data.js`):
+
+- One d12 per quadrant of the 22" × 30" board (drawn upright), read off the Random Terrain Table.
+- Pieces are placed at random whole-inch spots inside their quadrant, at least 2" from every other piece.
+  Large pieces are placed first across the whole board; if a layout does not fit, positions are retried
+  (the dice stand) and after that it fails with an error.
+- The sketch labels pieces A, B, …; the list under it gives each piece's gap to its two nearest board edges.
+- Tapping a piece moves it to another free spot in its quadrant. The app does not know the room's own
+  terrain, objectives or starting zone (they are only on the book's maps, which stay out of the repo), so
+  clashes with them are fixed by hand this way.
+- The step is shown in every room; a room whose set-up says it has no terrain is the player's call to skip.
+- Not built: tickable steps, keeping a room's layout after leaving it, dragging pieces, scatter terrain.
+
+## 8. Implementation steps
 
 1. `data.js` from `campaign-data.md`; `state.js` with save/load/export/import.
 2. Crew tab: create crew, roster cards, damage/XP steppers.
@@ -172,7 +195,7 @@ entries and notes. Room names are shown only for rooms a crew has reached.
 
 Each step is usable on its own; 1–4 is the MVP.
 
-## 8. Open questions
+## 9. Open questions
 
 - Co-op: is one roster per device enough?
 - Should exits roll in-app by default, or always ask for the physical dice result?

@@ -1,13 +1,14 @@
 // Rendering and event handling. Every button re-renders the whole app; typing never does
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
-  ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
+  ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, BOARD_HEIGHT_INCHES, BOARD_WIDTH_INCHES, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as store from './state.js';
+import { generateTerrain, moveTerrainPiece, renderTerrainSvg, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
 const appElement = document.getElementById('app');
@@ -115,15 +116,51 @@ function renderJourney() {
     reminders.push(`Sitting this one out: ${benched.map((member) => member.name).join(', ')}.`);
   }
 
+  if (!isCleared && !run.roomSetup.isMissionStarted) {
+    return `${renderRoomSetup(number, challenge, reminders)}${renderStationMap()}`;
+  }
+
   return `<section class="card room">
       <p class="eyebrow">Challenge ${number} <span class="chip ${isCleared ? 'ok' : 'warn'}">${isCleared ? 'cleared' : 'in progress'}</span></p>
       <h2>${escapeHtml(challenge.name)}</h2>
       <p class="page-ref">Rulebook p. ${challenge.page}</p>
       ${renderReminders(reminders)}
-      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : '<button class="primary" data-action="openPostGame">Challenge over →</button>')}
+      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="row wrap"><button class="primary" data-action="openPostGame">Challenge over →</button>
+        <button data-action="reopenRoomSetup">← Room set-up</button></div>`)}
     </section>
     ${!isCleared && ui.postGame ? renderPostGame(challenge, progress) : ''}
     ${renderStationMap()}`;
+}
+
+// the step between walking in and playing: the order follows the book's own set-up (p. 43–44)
+function renderRoomSetup(number, challenge, reminders) {
+  const crewGoingIn = state.run.crew.members.filter((member) => member.status === 'active').length;
+  return `<section class="card room">
+      <p class="eyebrow">Challenge ${number} <span class="chip warn">setting up</span></p>
+      <h2>${escapeHtml(challenge.name)}</h2>
+      <ol class="setup-steps">
+        <li><b>Briefing.</b> Read the room's opening on p. ${challenge.page}.</li>
+        <li><b>The room.</b> Lay out its map from the same pages: the room's own terrain, objectives and enemies.</li>
+        <li><b>General terrain.</b> Cover that is not on the map (p. 43–44). Skip this if the room's set-up says there is no terrain.
+          ${renderTerrain(state.run.roomSetup.terrain)}</li>
+        <li><b>Crew.</b> ${crewGoingIn} go in. Place them in the starting zone last (p. 44).</li>
+      </ol>
+      ${renderReminders(reminders)}
+      <button class="primary" data-action="beginChallenge">Begin challenge →</button>
+    </section>`;
+}
+
+function renderTerrain(terrain) {
+  if (!terrain) return '<button data-action="rollTerrain">Roll terrain</button>';
+  const quadrantsHtml = terrainPlacementsByQuadrant(terrain).map(({ name, roll, pieces }) => (
+    `<li><span class="terrain-quadrant">${name} · rolled ${roll}</span>
+      <ul class="plain">${pieces.map(({ letter, footprint, where }) => `<li><b>${letter}</b> ${footprint} <span class="terrain-where">${where}</span></li>`).join('')}</ul></li>`
+  )).join('');
+  return `${renderTerrainSvg(terrain)}
+    <p class="hint">The board is ${BOARD_WIDTH_INCHES}" × ${BOARD_HEIGHT_INCHES}", seen from above. Each piece lists its gap to the two nearest board edges.
+      Tap a piece to move it if it sits on something from the room's map.</p>
+    <ul class="plain terrain-list">${quadrantsHtml}</ul>
+    ${confirmButton('rollTerrain', 'Roll again')}`;
 }
 
 function renderReminders(reminders) {
@@ -470,6 +507,11 @@ const actions = {
   },
   rollInjury: ({ id }) => { ui.postGame.downed[id].roll = rollD12() + rollD12(); },
   applyPostGame: () => { store.completeCurrentChallenge(state, ui.postGame); ui.postGame = null; ui.exitRoll = ''; },
+
+  rollTerrain: () => { state.run.roomSetup.terrain = generateTerrain(rollD12); },
+  moveTerrainPiece: ({ index }) => { moveTerrainPiece(state.run.roomSetup.terrain, Number(index)); },
+  beginChallenge: () => { state.run.roomSetup.isMissionStarted = true; },
+  reopenRoomSetup: () => { state.run.roomSetup.isMissionStarted = false; },
 
   rollExit: () => { ui.exitRoll = rollD12(); },
   takeRolledExit: () => {
