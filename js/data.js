@@ -1,0 +1,192 @@
+// Campaign facts. The only place challenge numbers, thresholds and page references live.
+// Facts and pointers only — no text from the rulebook (see CLAUDE.md).
+
+export const STAT_KEYS = ['lf', 'mv', 'co', 're', 'in'];
+export const STAT_LABELS = { lf: 'Lf', mv: 'Mv', co: 'Co', re: 'Re', in: 'In' };
+
+export const BASE_STATS_BY_CREW_SIZE = {
+  4: { lf: 6, mv: 4, co: 4, re: 4, in: 4 },
+  6: { lf: 4, mv: 4, co: 3, re: 3, in: 3 },
+  8: { lf: 3, mv: 4, co: 2, re: 3, in: 2 },
+};
+
+// commanderBonus and commanderAbility apply to the commander only; crew composition rules are on `page`
+export const SHIP_TYPES = {
+  Medical: { page: 26, commanderBonus: { in: 1 }, commanderAbility: 'Senior Doctor', extraStartingEquipment: 0,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Scientist', 'Pilot', 'Senior Physician'],
+    equipmentCategories: ['general', 'medical'] },
+  Science: { page: 27, commanderBonus: { in: 1 }, commanderAbility: 'Practiced Scientist', extraStartingEquipment: 0,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Scientist', 'Pilot', 'Lead Scientist'],
+    equipmentCategories: ['general', 'scientific'] },
+  War: { page: 28, commanderBonus: { co: 1 }, commanderAbility: 'Warmaster', extraStartingEquipment: 0,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Scientist', 'Pilot', 'Veteran Soldier'],
+    equipmentCategories: ['general', 'weaponry'] },
+  Shipping: { page: 29, commanderBonus: { lf: 1 }, commanderAbility: 'Logistics Expert', extraStartingEquipment: 0,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Pilot'],
+    equipmentCategories: ['general', 'medical', 'weaponry', 'scientific', 'advancedTechnology'] },
+  Pirate: { page: 30, commanderBonus: { mv: 1 }, commanderAbility: 'Sneaky Scoundrel', extraStartingEquipment: 2,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Pilot', 'Ace Pilot'],
+    equipmentCategories: ['general', 'medical', 'weaponry', 'scientific'] },
+  Exploration: { page: 31, commanderBonus: { re: 1 }, commanderAbility: 'Survival Specialist', extraStartingEquipment: 0,
+    crewTypes: ['Medical Officer', 'Soldier', 'Engineer', 'Scientist', 'Pilot', 'Chief Engineer', 'Ace Pilot'],
+    equipmentCategories: ['general', 'medical', 'scientific'] },
+};
+
+export const COMMANDER_FREE_STAT_POINTS = 3;
+// p. 36: one weapon per crew member plus this many other pieces for the whole crew
+export const STARTING_OTHER_EQUIPMENT = 3;
+
+export const CREW_TYPES = {
+  'Medical Officer': { isAdvanced: false, bonus: { in: 1 }, abilities: ['Medical Attention'] },
+  Soldier: { isAdvanced: false, bonus: { co: 1 }, abilities: ['Combat Specialist'] },
+  Engineer: { isAdvanced: false, bonus: { re: 1 }, abilities: ['Weapon Tuning'] },
+  Scientist: { isAdvanced: false, bonus: { in: 1 }, abilities: ['Armor Tuning'] },
+  Pilot: { isAdvanced: false, bonus: { re: 1 }, abilities: ['Awareness'] },
+  'Senior Physician': { isAdvanced: true, bonus: { in: 2 }, abilities: ['Improved Medical Attention'] },
+  'Lead Scientist': { isAdvanced: true, bonus: { in: 2 }, abilities: ['Area of Focus', 'Armor Tuning'] },
+  'Veteran Soldier': { isAdvanced: true, bonus: { co: 2 }, abilities: ['Hard to Kill', 'Combat Specialist'] },
+  'Chief Engineer': { isAdvanced: true, bonus: { in: 1, re: 1 }, abilities: ['Bypass', 'Weapon Tuning'] },
+  'Ace Pilot': { isAdvanced: true, bonus: { re: 2 }, abilities: ['Ultimate Ace', 'Awareness'] },
+};
+
+// Names only — what an ability does is in the rulebook on its page.
+export const ABILITY_PAGES = {
+  'Medical Attention': 32, 'Combat Specialist': 32, 'Weapon Tuning': 32, 'Armor Tuning': 33, Awareness: 33,
+  'Improved Medical Attention': 33, 'Area of Focus': 33, 'Hard to Kill': 33, Bypass: 34, 'Ultimate Ace': 34,
+  'Senior Doctor': 26, 'Practiced Scientist': 27, Warmaster: 28, 'Logistics Expert': 29, 'Sneaky Scoundrel': 30,
+  'Survival Specialist': 31,
+};
+
+// Names only — what a piece does is in the rulebook on `page`.
+export const EQUIPMENT_CATEGORIES = {
+  general: { name: 'General Equipment', page: '36',
+    items: ['Scanner', 'Medi-Bag', 'Sidearm', 'Melee Weapon', 'Armored Jacket'] },
+  medical: { name: 'Medical Equipment', page: '36–37',
+    items: ['Antitoxin', 'Stabilization Module', 'Hazard Suit', 'Emergency Med-Patch', 'Stim-Shot'] },
+  weaponry: { name: 'Advanced Weaponry', page: '37',
+    items: ['Energy Melee Weapon', 'Energy Missile Weapon', 'Heavy Kinetic Missile Weapon', 'Heavy Melee Weapon'] },
+  scientific: { name: 'Scientific Gear', page: '37',
+    items: ['Hyper-Scanner', 'Chem-Protection Suit', 'Advanced Tech Kit', 'Mini-Lab Kit'] },
+  advancedTechnology: { name: 'Advanced Technology', page: '37–38',
+    items: ['Ablative Shields', 'Jump Boots', 'Drone System', 'Point-to-Point Teleporter', 'Heads-Up Display'] },
+};
+export const WEAPONS = ['Sidearm', 'Melee Weapon', 'Energy Melee Weapon', 'Energy Missile Weapon',
+  'Heavy Kinetic Missile Weapon', 'Heavy Melee Weapon'];
+
+export const EDGES = [
+  'Armored Force', 'Nano Tech', 'Psionic Talent', 'Telekinesis', 'Artificial Life Forms',
+  'Warrior Born', 'Hive Mind', 'Harmonious Culture', 'Natural Brutes', 'Smugglers',
+  'Shapeshifters', 'Time Masters', 'Chemically Enhanced', 'Parasites',
+];
+
+export const AGENDAS = {
+  rescue: { name: 'Rescue', partsNeeded: 1, onCompletion: 'Add one standard crew member with 0 XP (Crew tab → Add member).' },
+  tech: { name: 'Tech', partsNeeded: 1, onCompletion: 'Add one piece of Advanced Technology (p. 37).' },
+  biology: { name: 'Biology', partsNeeded: 2, onCompletion: 'Knowledge Shard — read p. 114, #3.' },
+  data: { name: 'Data', partsNeeded: 2, onCompletion: 'Knowledge Shard — read p. 115, #5.' },
+  weapons: { name: 'Weapons', partsNeeded: 1, onCompletion: 'Two crew members get +1 Combat.' },
+  medicine: { name: 'Medicine', partsNeeded: 2, onCompletion: 'Add one piece of Medical Equipment (p. 36).' },
+};
+
+// p. 41
+export const XP_PER_SURVIVED_CHALLENGE = 1;
+export const COMMANDER_BONUS_XP_PER_CHALLENGE = 1;
+// p. 38: d12 result needed to follow a challenge's Secondary Agenda section
+export const AGENDA_ROLL_TARGET = 5;
+export const STARTING_CHALLENGE = 1;
+
+export const COMMANDER_ADVANCEMENTS = [
+  { xp: 7, statOptions: STAT_KEYS },
+  { xp: 14, ability: 'Skill Expertise (p. 41)' },
+  { xp: 21, statOptions: STAT_KEYS },
+  { xp: 28, ability: 'Determined Leader (p. 41)' },
+  { xp: 35, statOptions: STAT_KEYS },
+];
+
+export const CREW_ADVANCEMENTS = [
+  { xp: 5, statOptions: ['lf', 'mv'] },
+  { xp: 10, statOptions: ['co', 're', 'in'] },
+  { xp: 15, statOptions: ['lf', 'mv'] },
+  { xp: 25, statOptions: ['co', 're', 'in'] },
+  { xp: 30, statOptions: ['lf', 'mv'] },
+];
+
+// 2d12, p. 40
+const INJURY_TABLE = [
+  { max: 2, key: 'hidden', label: 'Dead… but read p. 114, #1' },
+  { max: 5, key: 'allStatsDown', label: 'Worse for Wear — all stats −1' },
+  { max: 11, key: 'dead', label: 'Dead and Gone' },
+  { max: 17, key: 'fullRecovery', label: 'Full Recovery' },
+  { max: 20, key: 'recovering', label: 'Recovery Time — misses the next challenge' },
+  { max: 23, key: 'oneStatUp', label: 'Unexpected Recovery — one stat +1' },
+  { max: 24, key: 'allStatsUp', label: "It's a Miracle — all stats +1" },
+];
+
+export const INJURY_ROLL_MIN = 2;
+export const INJURY_ROLL_MAX = INJURY_TABLE.at(-1).max;
+
+export function injuryOutcomeForRoll(roll) {
+  if (!Number.isInteger(roll) || roll < INJURY_ROLL_MIN || roll > INJURY_ROLL_MAX) return null;
+  return INJURY_TABLE.find((row) => roll <= row.max);
+}
+
+export function injuryRollRangeLabel(outcomeKey) {
+  const rowIndex = INJURY_TABLE.findIndex((row) => row.key === outcomeKey);
+  const lowest = rowIndex === 0 ? INJURY_ROLL_MIN : INJURY_TABLE[rowIndex - 1].max + 1;
+  const highest = INJURY_TABLE[rowIndex].max;
+  return lowest === highest ? `${lowest}` : `${lowest}–${highest}`;
+}
+
+// exits: player chooses. exitRoll: d12 table. reminders: page pointers, shown for as long as the crew is in the room.
+export const CHALLENGES = {
+  1: { name: 'Docking Bay Access Port', page: 45,
+    exitRoll: [{ max: 1, to: 2 }, { max: 4, to: 3 }, { max: 8, to: 4 }, { max: 11, to: 5 }, { max: 12, to: 6 }] },
+  2: { name: 'The Darkened Hall', page: 47, exits: [{ label: 'Sealed Door', to: 6 }] },
+  3: { name: 'Repair Bay', page: 49, turnLimit: 4, exits: [{ label: 'Jammed Door', to: 4 }] },
+  4: { name: 'Fabrication Bay', page: 52,
+    exits: [{ label: 'Jammed Door', to: 3 }, { label: 'Rusted Door', to: 2 }, { label: 'Exposed Ventilation Shaft', to: 6 }] },
+  5: { name: 'Medical Bay', page: 54, agendas: ['data', 'medicine'], exits: [{ label: 'Door', to: 2 }] },
+  6: { name: 'Pod 6', page: 57, turnLimit: 5, noReturn: true,
+    reminders: ['When the challenge text sends you there: p. 114, #2.'],
+    exitRoll: [{ max: 3, to: 7 }, { max: 6, to: 10 }, { max: 9, to: 13 }, { max: 12, to: 15 }] },
+  7: { name: 'Science Lab', page: 60, agendas: ['data', 'biology'],
+    exits: [{ label: 'Broken Elevator Tube (Going Up)', to: 8 }, { label: 'Broken Elevator Tube (Going Down)', to: 15 }, { label: 'Broken Doors', to: 9 }] },
+  8: { name: 'Disused Bay', page: 63,
+    reminders: ['If you earn the Knowledge Shard: p. 114, #4.'],
+    exits: [{ label: 'Broken Elevator Tube (Going Down)', to: 7 }, { label: 'Rusted Conveyor Belt Tunnel', to: 10 }] },
+  9: { name: 'Chemical Lab', page: 65, exits: [{ label: 'Broken Doors', to: 7 }, { label: 'Ventilation System', to: 11 }] },
+  10: { name: 'Smelting Factory', page: 67, exits: [{ label: 'Emergency Exit', to: 12 }, { label: 'Rusted Conveyor Belt Tunnel', to: 8 }] },
+  11: { name: 'Greenhouse', page: 69, agendas: ['rescue', 'medicine'],
+    exits: [{ label: 'Broken Lift Tube Up', to: 12 }, { label: 'Broken Lift Tube Down', to: 13 }, { label: 'Ventilation System', to: 9 }] },
+  12: { name: 'Environmental Control Room', page: 72, agendas: ['biology', 'tech'],
+    exits: [{ label: 'Broken Lift Tube Down', to: 11 }, { label: 'Broken Lift Tube Up', to: 15 }, { label: 'Frozen Emergency Exit', to: 10 }] },
+  13: { name: 'Weapons Locker', page: 75, agendas: ['weapons'], exits: [{ label: 'Secured Door', to: 14 }] },
+  14: { name: 'Barracks', page: 78, exits: [{ label: 'Broken Lift Tube Down', to: 16 }] },
+  15: { name: 'Disused Bay', page: 80, exits: [{ label: 'Broken Lift Tube Up', to: 7 }, { label: 'Broken Lift Tube Down', to: 12 }] },
+  16: { name: 'Shuttle Bay', page: 81, noReturn: true,
+    reminders: ['After completing the challenge: Knowledge Shard, p. 115, #6.'],
+    exitRoll: [{ max: 6, to: 17 }, { max: 9, to: 18 }, { max: 11, to: 19 }, { max: 12, to: 20 }] },
+  17: { name: 'Trash Storage', page: 85,
+    reminders: ['At the start of turn 3: read p. 115, #7.'],
+    exits: [{ label: 'Sealed Door', to: 19 }] },
+  18: { name: 'Prison', page: 86, exits: [{ label: 'Sealed Door', to: 19 }] },
+  19: { name: 'Disused Bay', page: 88, turnLimit: 3,
+    exits: [{ label: 'Sealed Door', to: 17 }, { label: 'Rusted Door', to: 18 }, { label: 'Broken Lift Tube Up', to: 21 }, { label: 'Broken Lift Tube Down', to: 22 }] },
+  20: { name: 'Hologram Bay', page: 91,
+    reminders: ['If the challenge text sends you there: p. 115, #8 (and a Knowledge Shard: +1 to one stat).'],
+    exits: [{ label: 'Ventilation Shaft', to: 21 }] },
+  21: { name: 'Bar', page: 92, exits: [{ label: 'Explosion Hole', to: 22 }] },
+  22: { name: 'Engine Room', page: 94, turnLimit: 5, exits: [{ label: 'Functional Lift', to: 23 }] },
+  23: { name: 'Control Room', page: 96, canEarnLegacy: true,
+    reminders: ['If the Rewards section sends you there: p. 116, #9.'],
+    exits: [{ label: 'Bay Door', to: 24 }] },
+  24: { name: 'Master System', page: 99, reminders: ['Read p. 116, #10.'] },
+};
+
+export const LEGACY_PAGE_REFERENCE = 'p. 116, #9';
+export const MAX_LEGACY_COUNT = 2;
+
+export function exitForRoll(challenge, roll) {
+  if (!Number.isInteger(roll) || roll < 1 || roll > 12) return null;
+  return challenge.exitRoll.find((row) => roll <= row.max).to;
+}
