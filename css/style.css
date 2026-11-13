@@ -137,12 +137,53 @@ label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted)
 .injury select { flex: 1; min-width: 0; }
 .outcome { color: var(--accent); font-family: var(--mono), monospace; font-size: 14px; min-height: 1em; }
 
-.map, .log, .plain { list-style: none; margin: 0; padding: 0; }
-.map li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 2px solid var(--line); }
-.map li:first-child, .log li:first-child { border-top: 0; }
-.map li.current .map-number { background: var(--accent); color: var(--ink); }
-.map li.sealed { opacity: .5; }
-.map-number { flex: none; width: 36px; height: 36px; display: grid; place-items: center; background: var(--panel-raised); border: 2px solid var(--ink); border-radius: 6px; box-shadow: 2px 2px 0 var(--ink); font: 800 18px var(--display); }
+.log, .plain { list-style: none; margin: 0; padding: 0; }
+.log li:first-child { border-top: 0; }
+
+/* station map: the darkest surface in the app — a maintenance display in an unlit corridor */
+.map-card { background: #07061a; }
+.station-map { display: block; width: 100%; height: auto; margin-bottom: 8px; border: 2px solid var(--ink); border-radius: 4px;
+  background: radial-gradient(ellipse at 50% 30%, #15124a, #05040f 75%); user-select: none; -webkit-user-select: none; }
+.station-map text { font-family: var(--display), sans-serif; text-anchor: middle; }
+.map-tile { fill: none; stroke: rgb(110 100 255 / 10%); stroke-width: 1; }
+.corridor-wall, .corridor-floor, .route, .ghost-route, .bulkhead { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.corridor-wall { stroke: var(--ink); stroke-width: 14; }
+.corridor-floor { stroke: #2b2670; stroke-width: 8; }
+.corridor-floor.unknown { stroke-dasharray: 3 7; }
+.unknown-door { fill: var(--ink); stroke: var(--muted); stroke-width: 2; }
+.unknown-door-label { fill: var(--muted); font-size: 12px; font-weight: 800; }
+.route { stroke: var(--accent); stroke-width: 5; }
+.ghost-route { stroke: var(--pink); stroke-width: 4; stroke-dasharray: 2 9; opacity: .55; }
+.bulkhead { stroke: var(--danger); stroke-width: 4; stroke-dasharray: 14 8; stroke-linecap: butt; }
+.bulkhead-label { fill: var(--danger); font: 700 9px var(--mono), monospace; letter-spacing: .14em; text-anchor: start !important; }
+.room { cursor: pointer; }
+.tap-area { fill: transparent; }
+.room-shadow { fill: var(--ink); }
+.room-box { fill: var(--panel-raised); stroke: var(--ink); stroke-width: 2.5; }
+.room-number { fill: var(--text); font-size: 22px; font-weight: 800; }
+.room.ghost .room-box { fill: #0d0b2a; stroke: var(--line); stroke-dasharray: 4 4; }
+.room.ghost .room-number { fill: var(--muted); opacity: .7; }
+.room.sealed .room-box { fill: #14122e; stroke: #4a2530; }
+.room.sealed .room-number { fill: var(--muted); }
+.room.here .room-box { fill: var(--accent); animation: room-beacon 2.4s ease-in-out infinite; }
+.room.here .room-number { fill: var(--ink); }
+.room.selected .room-box { stroke: var(--pink); stroke-width: 4; }
+.death-marks { stroke: var(--danger); stroke-width: 3; stroke-linecap: round; }
+.death-marks.old { stroke: #8d6a80; }
+.death-marks text { stroke: none; fill: var(--danger); font-size: 11px; font-weight: 800; }
+.death-marks.old text { fill: #8d6a80; }
+@keyframes room-beacon { 50% { filter: drop-shadow(0 0 7px var(--accent)); } }
+@media (prefers-reduced-motion: reduce) { .room.here .room-box { animation: none; } }
+
+.map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.legend-route, .legend-ghost { display: inline-block; width: 22px; height: 0; border-top: 4px solid var(--accent); margin-left: 6px; }
+.legend-ghost { border-top: 4px dotted var(--pink); }
+.legend-death { color: var(--danger); font-weight: 800; margin-left: 6px; }
+.map-detail { border-top: 2px solid var(--line); padding-top: 12px; }
+.map-detail ul { margin-bottom: 10px; }
+.map-detail .fallen { color: var(--danger); }
+.map-detail .room-log li { color: var(--muted); font-size: 14px; }
+.map-detail .room-log li.note { color: var(--text); border-left: 3px solid var(--accent); padding-left: 8px; margin: 4px 0; }
 .log li { padding: 10px 0; border-top: 2px solid var(--line); }
 .log p { margin: 2px 0 0; }
 .log textarea { margin: 4px 0 0; }

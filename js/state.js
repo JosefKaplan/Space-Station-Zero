@@ -6,7 +6,7 @@ import {
 } from './data.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MEMBER_STATUSES = ['active', 'recovering', 'dead'];
 
 export function createEmptyState() {
@@ -36,6 +36,21 @@ function migrateFromVersion1(saved) {
   saved.schemaVersion = 2;
 }
 
+// v2 did not record the path walked or where crew members fell
+function migrateFromVersion2(saved) {
+  for (const crew of saved.station?.pastCrews ?? []) {
+    crew.route = [];
+    crew.fallen = (crew.fallen ?? []).map((name) => ({ name, challenge: null }));
+  }
+  if (saved.run) {
+    // every log entry was written in the room the crew stood in, so their order replays the walk
+    const walked = (saved.run.log ?? []).map((entry) => entry.challenge).concat(saved.run.currentChallenge);
+    saved.run.route = walked.filter((challenge, index) => challenge !== walked[index - 1]);
+    for (const member of saved.run.crew?.members ?? []) member.diedInChallenge = null;
+  }
+  saved.schemaVersion = 3;
+}
+
 function requireValid(condition, what) {
   if (!condition) throw new Error(`Save data is damaged: ${what}.`);
 }
@@ -54,8 +69,9 @@ function assertValidState(saved) {
   requireValid(isCount(station.legacyCount), 'legacy count');
   requireValid(Array.isArray(station.pastCrews) && station.pastCrews.every((crew) => isPlainObject(crew)
     && typeof crew.name === 'string' && typeof crew.outcome === 'string' && isChallengeNumber(crew.endedInChallenge)
-    && isCount(crew.challengesCleared) && Array.isArray(crew.fallen)
-    && crew.fallen.every((name) => typeof name === 'string')), 'previous crews');
+    && isCount(crew.challengesCleared) && isChallengeList(crew.route) && Array.isArray(crew.fallen)
+    && crew.fallen.every((entry) => isPlainObject(entry) && typeof entry.name === 'string'
+      && (entry.challenge === null || isChallengeNumber(entry.challenge)))), 'previous crews');
   if (run === null) return;
 
   requireValid(isPlainObject(run) && isPlainObject(run.crew), 'crew is missing');
@@ -68,11 +84,13 @@ function assertValidState(saved) {
     requireValid(isPlainObject(member)
       && ['id', 'name', 'type', 'abilities', 'equipment'].every((field) => typeof member[field] === 'string')
       && typeof member.isCommander === 'boolean' && MEMBER_STATUSES.includes(member.status)
+      && (member.diedInChallenge === null || isChallengeNumber(member.diedInChallenge))
       && isPlainObject(member.stats) && STAT_KEYS.every((stat) => isCount(member.stats[stat]))
       && ['damage', 'xp', 'advancementsTaken'].every((field) => isCount(member[field])), `crew member ${index + 1}`);
   });
   requireValid(isChallengeNumber(run.currentChallenge), 'current challenge');
   requireValid(isChallengeList(run.cleared) && isChallengeList(run.sealed), 'cleared or sealed challenges');
+  requireValid(isChallengeList(run.route) && run.route.at(-1) === run.currentChallenge, 'route');
   requireValid([null, 'lost', 'victory'].includes(run.ended), 'campaign ending');
   requireValid(Array.isArray(run.log) && run.log.every((entry) => isPlainObject(entry) && isChallengeNumber(entry.challenge)
     && typeof entry.at === 'string' && typeof entry.text === 'string' && typeof entry.isNote === 'boolean'), 'log');
@@ -80,10 +98,11 @@ function assertValidState(saved) {
 
 export function parseSavedState(text) {
   const saved = JSON.parse(text);
-  if (!isPlainObject(saved) || ![1, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+  if (!isPlainObject(saved) || ![1, 2, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
+  if (saved.schemaVersion === 2) migrateFromVersion2(saved);
   assertValidState(saved);
   return saved;
 }
@@ -119,7 +138,7 @@ function statsWithBonus(baseStats, bonus) {
 export function createMember({ name, type, isCommander, stats, abilities = '' }) {
   return {
     id: newId(), name, type, isCommander, stats,
-    damage: 0, xp: 0, advancementsTaken: 0, abilities, equipment: '', status: 'active',
+    damage: 0, xp: 0, advancementsTaken: 0, abilities, equipment: '', status: 'active', diedInChallenge: null,
   };
 }
 
@@ -154,7 +173,7 @@ export function startNewCrew(state, { name, size, shipType, edge, agenda, comman
   }
   state.run = {
     crew: { name: name || 'Unnamed crew', size, shipType, edge, agenda, members },
-    currentChallenge: STARTING_CHALLENGE, cleared: [], sealed: [], log: [], ended: null,
+    currentChallenge: STARTING_CHALLENGE, route: [STARTING_CHALLENGE], cleared: [], sealed: [], log: [], ended: null,
   };
   addLogEntry(state.run, `${state.run.crew.name} leaves Dock Zero.`);
 }
@@ -189,6 +208,14 @@ export function canAdvanceAgendaInCurrentChallenge(state) {
   const progress = agendaProgress(state);
   return Boolean(progress && !progress.isComplete
     && CHALLENGES[state.run.currentChallenge].agendas?.includes(progress.agendaKey));
+}
+
+// the map marks where each crew member fell; a death undone on the roster loses its mark
+export function recordDeathLocations(run) {
+  for (const member of run.crew.members) {
+    if (member.status !== 'dead') member.diedInChallenge = null;
+    else member.diedInChallenge ??= run.currentChallenge;
+  }
 }
 
 function applyInjury(member, outcome, chosenStat) {
@@ -227,6 +254,7 @@ export function completeCurrentChallenge(state, draft) {
     applyInjury(member, outcome, chosenStat);
     return `${member.name}: ${outcome.label}`;
   });
+  recordDeathLocations(run);
 
   for (const member of participants) {
     if (member.status === 'dead') continue;
@@ -277,6 +305,7 @@ export function moveToChallenge(run, destination, viaLabel) {
   if (run.sealed.includes(destination)) throw new Error(`Challenge ${destination} is sealed behind you.`);
   addLogEntry(run, `${viaLabel} → Challenge ${destination}.`);
   run.currentChallenge = destination;
+  run.route.push(destination);
 }
 
 export function retireCrew(state) {
@@ -286,7 +315,9 @@ export function retireCrew(state) {
     outcome: run.ended ?? 'retired',
     endedInChallenge: run.currentChallenge,
     challengesCleared: run.cleared.length,
-    fallen: run.crew.members.filter((member) => member.status === 'dead').map((member) => member.name),
+    route: run.route,
+    fallen: run.crew.members.filter((member) => member.status === 'dead')
+      .map((member) => ({ name: member.name, challenge: member.diedInChallenge })),
   });
   state.run = null;
 }

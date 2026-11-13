@@ -6,6 +6,7 @@ import {
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
+import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as store from './state.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
@@ -17,6 +18,7 @@ const ui = {
   tab: 'journey',
   postGame: null,
   exitRoll: '',
+  mapSelected: null,
   confirmKey: null,
   errorMessage: null,
   noticeMessage: null,
@@ -85,7 +87,7 @@ function renderJourney() {
   if (!run) {
     return `<section class="card"><h2>No crew aboard</h2>
       <p>Build your crew with the rulebook (p. 24–39), then register it here.</p>
-      <button class="primary" data-action="showTab" data-tab="crew">Create a crew</button></section>`;
+      <button class="primary" data-action="showTab" data-tab="crew">Create a crew</button></section>${renderStationMap()}`;
   }
   if (run.ended) {
     return `<section class="card"><h2>${run.ended === 'victory' ? 'Journey complete' : 'Crew lost'}</h2>
@@ -202,21 +204,37 @@ function renderPostGame(challenge, progress) {
 }
 
 function renderStationMap() {
+  const { current, ghosts } = knownChallenges(state);
   const run = state.run;
-  const rows = store.visitedChallenges(run).map((number) => {
-    const challenge = CHALLENGES[number];
-    const isCurrent = number === run.currentChallenge;
-    const status = run.sealed.includes(number) ? 'sealed' : run.cleared.includes(number) ? 'cleared' : 'in progress';
-    // doors are only known once the room has been searched
-    const knownExits = run.cleared.includes(number)
-      ? (challenge.exits ? challenge.exits.map((exit) => exit.to).join(', ') : challenge.exitRoll ? 'd12' : '—')
-      : '?';
-    return `<li class="${isCurrent ? 'current' : ''} ${status === 'sealed' ? 'sealed' : ''}">
-      <span class="map-number">${number}</span>
-      <span class="grow">${escapeHtml(challenge.name)}<small> → ${knownExits}</small></span>
-      <span class="chip">${isCurrent ? 'here' : status}</span></li>`;
-  }).join('');
-  return `<section class="card"><h3>Station map</h3><ul class="map">${rows}</ul></section>`;
+  const selected = [...current, ...ghosts].includes(ui.mapSelected) ? ui.mapSelected : run?.currentChallenge;
+  const mapSvg = renderStationMapSvg(state, selected);
+  if (!mapSvg) return '';
+  return `<section class="card map-card"><h3>Station map</h3>
+    ${mapSvg}
+    <p class="hint map-legend"><span class="legend-route"></span> your route <span class="legend-ghost"></span> earlier crews <span class="legend-death">✕</span> fallen · tap a room</p>
+    ${selected ? renderMapRoomDetail(selected, ghosts.includes(selected)) : ''}
+  </section>`;
+}
+
+function renderMapRoomDetail(number, isGhost) {
+  const run = state.run;
+  const challenge = CHALLENGES[number];
+  const status = isGhost ? 'earlier crew only'
+    : number === run.currentChallenge ? 'here'
+      : run.sealed.includes(number) ? 'sealed' : 'cleared';
+  // doors are only known once this crew has searched the room
+  const doors = !isGhost && run.cleared.includes(number)
+    ? (challenge.exits ? challenge.exits.map((exit) => `${escapeHtml(exit.label)} → ${challengeTitle(exit.to)}`) : challenge.exitRoll ? ['Way out decided by a d12'] : [])
+    : [];
+  const fallenHere = fallenByChallenge(state)[number] ?? [];
+  const logEntries = isGhost ? [] : run.log.filter((entry) => entry.challenge === number);
+  return `<div class="map-detail">
+    <p class="eyebrow">Challenge ${number} <span class="chip">${status}</span></p>
+    <p><b>${escapeHtml(challenge.name)}</b> <span class="page-ref">p. ${challenge.page}</span></p>
+    ${doors.length ? `<ul class="plain doors">${doors.map((door) => `<li>${door}</li>`).join('')}</ul>` : ''}
+    ${fallenHere.length ? `<ul class="plain fallen">${fallenHere.map((entry) => `<li>✕ ${escapeHtml(entry.name)} <small>${escapeHtml(entry.crewName)}</small></li>`).join('')}</ul>` : ''}
+    ${logEntries.length ? `<ul class="plain room-log">${logEntries.map((entry) => `<li class="${entry.isNote ? 'note' : ''}">${escapeHtml(entry.text)}</li>`).join('')}</ul>` : ''}
+  </div>`;
 }
 
 // ---------- crew ----------
@@ -328,7 +346,7 @@ function renderLog() {
   const pastCrews = state.station.pastCrews;
   const graveyard = `${run ? run.crew.members.filter((member) => member.status === 'dead').map((member) => `<li>${escapeHtml(member.name)} <small>${escapeHtml(member.type)}</small></li>`).join('') : ''}`;
   const pastCrewsHtml = pastCrews.length ? `<section class="card"><h3>Previous crews</h3><ul class="plain">${pastCrews.map((crew) => (
-    `<li><b>${escapeHtml(crew.name)}</b> — ${escapeHtml(crew.outcome)}, ${crew.challengesCleared} cleared, ended in Challenge ${crew.endedInChallenge}${crew.fallen.length ? `<br><small>Fallen: ${escapeHtml(crew.fallen.join(', '))}</small>` : ''}</li>`)).join('')}</ul></section>` : '';
+    `<li><b>${escapeHtml(crew.name)}</b> — ${escapeHtml(crew.outcome)}, ${crew.challengesCleared} cleared, ended in Challenge ${crew.endedInChallenge}${crew.fallen.length ? `<br><small>Fallen: ${escapeHtml(crew.fallen.map((entry) => entry.name).join(', '))}</small>` : ''}</li>`)).join('')}</ul></section>` : '';
   if (!run) return `<section class="card"><h2>Captain's log</h2><p>No crew aboard.</p></section>${pastCrewsHtml}`;
 
   const entries = run.log.map((entry, index) => ({ entry, index })).reverse().map(({ entry, index }) => (
@@ -404,6 +422,7 @@ function render() {
 
 const actions = {
   showTab: ({ tab }) => { ui.tab = tab; },
+  selectMapRoom: ({ number }) => { ui.mapSelected = Number(number); },
   step: ({ path, delta }) => { setAtPath(state, path, Math.max(0, getAtPath(state, path) + Number(delta))); },
   stepUi: ({ path, delta }) => { setAtPath(ui, path, Math.max(1, getAtPath(ui, path) + Number(delta))); },
 
@@ -442,8 +461,9 @@ const actions = {
     if (!destination) throw new Error('Enter a d12 result between 1 and 12.');
     store.moveToChallenge(state.run, destination, `Rolled ${ui.exitRoll}`);
     ui.exitRoll = '';
+    ui.mapSelected = null;
   },
-  takeExit: ({ to, label }) => { store.moveToChallenge(state.run, Number(to), label); ui.exitRoll = ''; },
+  takeExit: ({ to, label }) => { store.moveToChallenge(state.run, Number(to), label); ui.exitRoll = ''; ui.mapSelected = null; },
 
   addNote: () => {
     if (!ui.logNote.trim()) throw new Error('Write the note first.');
@@ -455,7 +475,7 @@ const actions = {
 
   exportSave: () => { downloadTextFile('ssz-captains-log.json', JSON.stringify(state, null, 2), 'application/json'); },
   downloadRawSave: () => { downloadTextFile('ssz-raw-save.txt', localStorage.getItem(store.STORAGE_KEY), 'text/plain'); },
-  retireCrew: () => { store.retireCrew(state); ui.postGame = null; ui.tab = 'crew'; },
+  retireCrew: () => { store.retireCrew(state); ui.postGame = null; ui.mapSelected = null; ui.tab = 'crew'; },
   wipeEverything: () => { state = store.createEmptyState(); unreadableSaveMessage = null; ui.postGame = null; ui.tab = 'journey'; },
 };
 
@@ -495,6 +515,7 @@ function applyInput(element) {
   if ((element.type === 'number' || 'number' in element.dataset) && value !== '') value = Number(value);
   if (statePath) {
     setAtPath(state, statePath, value);
+    if (state.run) store.recordDeathLocations(state.run);
     store.saveState(state);
   } else {
     setAtPath(ui, uiPath, value);

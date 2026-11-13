@@ -6,6 +6,7 @@ A tiny, free, offline-friendly campaign companion for the miniatures game
 It replaces the paper roster and the "wait, which room were we in?" notes:
 
 - **Journey** — where your crew is, which exits are open, where you can backtrack to, and what is sealed behind you.
+- **Station map** — a map that fills in as you explore: your route, sealed sections, where crew members fell, and the faint trails of crews that came before.
 - **Roster** — commander and crew with stats, damage, XP, and reminders when someone has earned an advancement.
 - **Crew builder** — pick ship and crew types, spend the commander's points, and add abilities and equipment from pick lists (names and page references only).
 - **After the challenge** — a short guided checklist: injuries, experience, agenda roll, pick the next door.

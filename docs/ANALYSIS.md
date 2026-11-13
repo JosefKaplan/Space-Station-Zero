@@ -32,8 +32,7 @@ One screen per job, bottom tab bar, phone-first.
 - **Complete challenge** → opens the post-game flow (below).
 - After completion, **exits**: door buttons, or a "Roll d12" button for random-exit rooms (manual override
   allowed — you may prefer real dice). Plus "Backtrack to…" listing cleared rooms still reachable.
-- Small station map: a vertical list/graph of visited rooms and the known doors between them; unvisited
-  targets show as `Challenge N` with no name. Sealed (No Return) rooms are greyed out.
+- Station map: see § Station map below.
 
 ### Crew
 - Header: crew size, ship type, edge, secondary agenda (+ progress 0/1/2).
@@ -94,18 +93,20 @@ build step for ~500 lines of UI.
 ```text
 // localStorage key (shape sketch, not runnable code) "ssz-captains-log"
 {
-  schemaVersion: 2,
+  schemaVersion: 3,
   station: {                       // survives across crews
     agendaProgress: { data: 1 },   // parts found by any crew
     legacyCount: 0,                // campaign-wide unlock, capped in data.js
-    pastCrews: [{ name, outcome, endedInChallenge, challengesCleared, fallen: [...] }]
+    pastCrews: [{ name, outcome, endedInChallenge, challengesCleared,
+                 route: [...], fallen: [{ name, challenge }] }]   // drawn as ghosts on the map
   },
   run: {                           // one crew's campaign; null before the first crew
     crew: { name, size: 4|6|8, shipType, edge, agenda,
             members: [{ id, name, type, isCommander, stats: {lf,mv,co,re,in},
                         damage, xp, advancementsTaken, abilities, equipment,
-                        status: "active"|"recovering"|"dead" }] },
+                        status: "active"|"recovering"|"dead", diedInChallenge }] },
     currentChallenge: 1,
+    route: [1],                    // every room entered, in order, backtracks included
     cleared: [],                   // challenge numbers; "is the current room cleared" and "visited" derive from it
     sealed: [],                    // rooms behind a No Return room, unreachable
     ended: null,                   // null | "lost" | "victory"
@@ -117,7 +118,46 @@ build step for ~500 lines of UI.
 `data.js` shape per room: `{ number, name, page, exits: [{label, to}] | {roll: [{max, to}]},
 noReturn, turnLimit, agendas: [...], pointers: [{when, page, number}] }`.
 
-## 6. Implementation steps
+## 6. Station map
+
+The Journey tab draws the station as crews have actually seen it: a dungeon map that fills in, and scars, over time.
+It is this app's own drawing. Room positions are invented from the exit graph, not copied from the book.
+
+**Design choices**
+
+- Mood: the darkest surface in the app, like a maintenance display in an unlit corridor. Same ink outlines and
+  spray yellow as the rest, with red only for death and sealed sections.
+- Fog of war: a room is drawn only once a crew has stood in it. Nothing reveals how big the station is; the
+  drawing grows downward as the crew goes deeper.
+- Memory: routes and deaths of earlier crews stay on the map for every later crew.
+
+**What is drawn where** (bottom layer first)
+
+| Layer | Drawn as | Source |
+| --- | --- | --- |
+| Corridors | dark pipes between rooms | every door a crew walked through, plus the doors of rooms this crew has searched |
+| Unknown doors | short dashed stub ending in "?" | exits of a searched room that lead somewhere no crew has been |
+| Earlier crews' routes | faint pink dotted spray line | `station.pastCrews[].route` |
+| This crew's route | yellow spray line | `run.route` |
+| Bulkheads | red dashed line marked SEALED | below each cleared No Return room |
+| Rooms | numbered box: lit (this crew), dashed outline (earlier crews only), dimmed (sealed), yellow and glowing (here) | `run.cleared`, `run.sealed`, routes |
+| Death marks | red crosses above a room (this crew), grey-pink crosses below it (earlier crews) | `member.diedInChallenge`, `pastCrews[].fallen` |
+
+Tapping a room opens a panel under the map: name and page, known doors, who fell there, and that room's log
+entries and notes. Room names are shown only for rooms a crew has reached.
+
+**Implementation**
+
+1. Layout in `js/data.js`: `map: [column, row]` per challenge on a 5-column grid, and `via` bend points on exits
+   whose straight line would cross another room. Decks follow the "up"/"down" exits; the three sections are
+   stacked top to bottom, split at the No Return rooms.
+2. Save format v3 (`js/state.js`): `run.route`, `member.diedInChallenge`, and `route` plus located `fallen`
+   entries on past crews. Migration rebuilds the route of a v2 save from its log; older deaths have no location.
+3. `js/map.js`: builds the SVG from state. No user text goes into it, only numbers and shapes.
+4. `js/app.js`: map card on the Journey tab (also shown with no crew aboard, as ghosts only) and the room panel.
+5. Not built: pan/zoom, room names on the map itself, per-crew colours, hand-drawn annotations.
+
+## 7. Implementation steps
 
 1. `data.js` from `campaign-data.md`; `state.js` with save/load/export/import.
 2. Crew tab: create crew, roster cards, damage/XP steppers.
@@ -129,7 +169,7 @@ noReturn, turnLimit, agendas: [...], pointers: [{when, page, number}] }`.
 
 Each step is usable on its own; 1–4 is the MVP.
 
-## 7. Open questions
+## 8. Open questions
 
 - Co-op: is one roster per device enough?
 - Should exits roll in-app by default, or always ask for the physical dice result?
