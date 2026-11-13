@@ -59,7 +59,10 @@ One screen per job, bottom tab bar, phone-first.
 - Graveyard: fallen crew members and previous crews.
 
 ### Dice (small)
-- Pool size, optional target number → rolls d12s, counts evens, flags critical success/failure.
+- Pool size, optional successes needed and target number → rolls d12s, counts evens, says passed or
+  how many short, flags critical success/failure.
+- Collapsible "How do I make a test?" help: short reminders in the app's own words, each ending in a
+  page reference (`DICE_HELP` in `data.js`). Never rulebook wording.
 
 ### Settings
 - Export / import JSON, start new crew (keeps station layer), wipe everything.

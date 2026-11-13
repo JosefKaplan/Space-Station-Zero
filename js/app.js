@@ -2,7 +2,7 @@
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
-  COMMANDER_FREE_STAT_POINTS, CREW_TYPES, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
+  COMMANDER_FREE_STAT_POINTS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
@@ -23,7 +23,7 @@ const ui = {
   errorMessage: null,
   noticeMessage: null,
   logNote: '',
-  dice: { pool: 5, target: '', rolled: null },
+  dice: { pool: 5, needed: '', target: '', rolled: null, isHelpOpen: false },
   newCrew: { name: '', commanderName: '', size: 6, shipType: 'Exploration', edge: EDGES[0], agenda: '',
     commanderPoints: store.zeroStats(), memberNames: Array(8).fill(''),
     memberTypes: Array(8).fill('Soldier') },
@@ -364,24 +364,40 @@ function renderLog() {
 
 // ---------- dice ----------
 
+function diceResultText(rolled) {
+  const targetNumber = Number(rolled.target) || 0;
+  const successesNeeded = Number(rolled.needed) || 0;
+  const evenSuccesses = rolled.faces.filter((face) => face % 2 === 0 && face >= targetNumber).length;
+  const isCriticalSuccess = rolled.faces.filter((face) => face === 12).length >= 2;
+  const isCriticalFailure = !isCriticalSuccess && rolled.faces.filter((face) => face === 1).length >= 2;
+  if (isCriticalFailure) return 'Critical failure';
+  const successes = isCriticalSuccess ? evenSuccesses * 2 : evenSuccesses;
+  const count = `${successes} success${successes === 1 ? '' : 'es'}`;
+  if (isCriticalSuccess) return `Critical success — ${count}`;
+  if (!successesNeeded) return count;
+  return successes >= successesNeeded ? `${count} — passed` : `${count} — ${successesNeeded - successes} short`;
+}
+
 function renderDice() {
-  const { pool, target, rolled } = ui.dice;
+  const { pool, target, needed, rolled, isHelpOpen } = ui.dice;
   let resultHtml = '';
   if (rolled) {
     const targetNumber = Number(rolled.target) || 0;
     const isSuccess = (face) => face % 2 === 0 && face >= targetNumber;
-    const successes = rolled.faces.filter(isSuccess).length;
-    const isCriticalSuccess = rolled.faces.filter((face) => face === 12).length >= 2;
-    const isCriticalFailure = !isCriticalSuccess && rolled.faces.filter((face) => face === 1).length >= 2;
     resultHtml = `<div class="dice">${rolled.faces.map((face) => `<span class="die ${isSuccess(face) ? 'hit' : ''}">${face}</span>`).join('')}</div>
-      <p class="result">${isCriticalFailure ? 'Critical failure' : `${isCriticalSuccess ? successes * 2 : successes} success(es)${isCriticalSuccess ? ' — critical success, doubled' : ''}`}</p>`;
+      <p class="result">${escapeHtml(diceResultText(rolled))}</p>`;
   }
+  const numberField = (label, key, value, max, placeholder) => `<label class="stat"><span class="stat-label">${label}</span>
+    <input type="number" min="0" max="${max}" inputmode="numeric" placeholder="${placeholder}" data-bind-ui="dice.${key}" value="${escapeHtml(value)}"></label>`;
   return `<section class="card form"><h2>Dice</h2>
-    <p class="hint">d12 pool, evens succeed. Two 12s: critical success. Two 1s: critical failure (p. 15–17).</p>
-    <div class="stats two">${stepper('Dice', 'dice.pool', pool, 'stepUi')}
-      <label class="stat"><span class="stat-label">Target (n+)</span><input type="number" min="0" max="12" inputmode="numeric" data-bind-ui="dice.target" value="${escapeHtml(target)}"></label></div>
+    <p class="hint">A test reads like <b>Reaction 2 (6+)</b>: roll your Reaction in d12s, you need 2 successes, evens of 6 or more count.</p>
+    <div class="stats three">${stepper('Dice', 'dice.pool', pool, 'stepUi')}
+      ${numberField('Needed', 'needed', needed, 99, 'any')}${numberField('Target', 'target', target, 12, 'n+')}</div>
     <button class="primary" data-action="rollPool">Roll</button>
-    ${resultHtml}</section>`;
+    ${resultHtml}</section>
+    <section class="card"><button class="help-toggle" data-action="toggleDiceHelp" aria-expanded="${isHelpOpen}">${isHelpOpen ? 'Hide' : 'How do I make a test?'}</button>
+      ${isHelpOpen ? `<dl class="help">${DICE_HELP.map(({ question, answer }) => `<dt>${escapeHtml(question)}</dt><dd>${escapeHtml(answer)}</dd>`).join('')}</dl>` : ''}
+    </section>`;
 }
 
 // ---------- settings ----------
@@ -471,7 +487,8 @@ const actions = {
     ui.logNote = '';
   },
   exportMarkdown: () => { downloadTextFile('captains-log.md', store.logAsMarkdown(state.run), 'text/markdown'); },
-  rollPool: () => { ui.dice.rolled = { faces: Array.from({ length: ui.dice.pool }, rollD12), target: ui.dice.target }; },
+  rollPool: () => { ui.dice.rolled = { faces: Array.from({ length: ui.dice.pool }, rollD12), target: ui.dice.target, needed: ui.dice.needed }; },
+  toggleDiceHelp: () => { ui.dice.isHelpOpen = !ui.dice.isHelpOpen; },
 
   exportSave: () => { downloadTextFile('ssz-captains-log.json', JSON.stringify(state, null, 2), 'application/json'); },
   downloadRawSave: () => { downloadTextFile('ssz-raw-save.txt', localStorage.getItem(store.STORAGE_KEY), 'text/plain'); },

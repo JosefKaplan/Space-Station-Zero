@@ -88,6 +88,27 @@ export const AGENDAS = {
   medicine: { name: 'Medicine', partsNeeded: 2, onCompletion: 'Add one piece of Medical Equipment (p. 36).' },
 };
 
+// d12 needed to keep the initiative for the 2nd, 3rd and every later activation in a turn (p. 14)
+export const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
+
+// Short reminders in this app's own words, not the rulebook's; the pages have the full rules and examples.
+export const DICE_HELP = [
+  { question: 'How do I read "Reaction 2 (6+)"?',
+    answer: 'Roll one d12 per point of the stat named (here Reaction). You need 2 successes, and only even results of 6 or higher count. With no bracket, every even result counts. p. 15–16' },
+  { question: 'What counts as a success?',
+    answer: 'An even number that is at least the target in brackets. Odd results never count. p. 15' },
+  { question: 'One roll was not enough. Now what?',
+    answer: 'Successes add up over several rolls and several crew members until the number is reached, unless the test is marked Single Roll. p. 16' },
+  { question: 'What is different about a Save?',
+    answer: 'It is a single roll and costs no action. Falling short usually means damage equal to the successes you are missing. p. 16' },
+  { question: 'What do 12s and 1s do?',
+    answer: 'Two or more 12s: the test succeeds whatever was needed, and successes count double. Two or more 1s: it fails, unless there are also two 12s. p. 17' },
+  { question: 'How many crew can act before the enemy?',
+    answer: `The first acts for free. Roll a d12 to keep going: ${RETAIN_INITIATIVE_ROLLS[0]}+ for the second, ${RETAIN_INITIATIVE_ROLLS[1]}+ for the third, ${RETAIN_INITIATIVE_ROLLS[2]}+ after that. p. 13–14` },
+  { question: 'How does an attack work?',
+    answer: 'Attacker and defender both roll Combat. See p. 20.' },
+];
+
 // p. 41
 export const XP_PER_SURVIVED_CHALLENGE = 1;
 export const COMMANDER_BONUS_XP_PER_CHALLENGE = 1;
