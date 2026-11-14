@@ -2,7 +2,7 @@
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
-  COMMANDER_FREE_STAT_POINTS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
+  COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS, startingGearRules,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
@@ -290,9 +290,23 @@ function renderLore(roomLayout) {
     ? `<details class="lore-box" data-lore ${ui.isLoreOpen ? 'open' : ''}><summary>Lore</summary><p class="lore">${renderBookText(roomLayout.lore)}</p></details>` : '';
 }
 
+// With several crews: the app's own reminders, plus the sentences of this room's rules (the book's text, when it is loaded)
+// that speak of crews, so nothing that depends on the number of crews is missed in a long rules section
+const CREW_COUNT_PATTERN = /number of crews|per crew|each crew|every crew|crews? participating|beyond the first|co-?op/i;
+function renderCoopNotes(roomLayout) {
+  const crewCount = participatingCrewCount();
+  if (crewCount < 2) return '';
+  const bookLines = (roomLayout?.rules ?? []).flatMap((section) => section.blocks
+    .filter((block) => block.t !== 'table' && CREW_COUNT_PATTERN.test(block.x))
+    .map((block) => `<li><b>${escapeHtml(section.title)}:</b> ${renderBookText(block.x)}</li>`));
+  return `<details class="coop-notes"><summary>Co-op: ${crewCount} crews</summary>
+    <ul class="plain">${COOP_REMINDERS.map((reminder) => `<li>${escapeHtml(reminder)}</li>`).join('')}</ul>
+    ${bookLines.length ? `<h4 class="plain-heading">In this room's rules, about crews</h4><ul class="plain">${bookLines.join('')}</ul>` : ''}</details>`;
+}
+
 function renderRoomInfo(roomLayout) {
-  if (!roomLayout) return '<p class="hint">No room layout loaded for this challenge: the footprints come from <code>data/room-footprints.json</code>.</p>';
-  return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomRules(roomLayout)}`;
+  if (!roomLayout) return `${renderCoopNotes(null)}<p class="hint">No room layout loaded for this challenge: the footprints come from <code>data/room-footprints.json</code>.</p>`;
+  return `${renderRoomSummary(roomLayout)}${renderCoopNotes(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomRules(roomLayout)}`;
 }
 
 const BOARD_INFO_HINT = 'Hover or tap an area, object or piece on the map for its details.';
@@ -322,6 +336,14 @@ function renderRoomTable(number, { isSettingUp }) {
 }
 
 // the step between walking in and playing: the order follows the book's own set-up (p. 43–44)
+// who is in the party, and the way to bring a friend's crew in before the room starts (co-op)
+function renderPartyLine() {
+  const run = state.run;
+  const canAddCrew = !run.ended && run.crews.length < store.MAX_CREWS;
+  return `<p class="hint">Party: ${escapeHtml(partyName(run))} (${run.crews.length} crew${run.crews.length > 1 ? 's' : ''}).${run.crews.length > 1 ? ' Enemy numbers and the co-op rules follow the crews.' : ' Playing co-op? Add the other player\'s crew first: enemy numbers and the co-op rules follow the crews.'}</p>
+    ${canAddCrew ? `<button data-action="addCrewToParty">+ Add another crew (${run.crews.length}/${store.MAX_CREWS})</button>` : ''}`;
+}
+
 function renderRoomSetup(number, challenge, reminders) {
   return `<section class="card room">
       <p class="eyebrow">Challenge ${number} <span class="chip warn">setting up</span></p>
@@ -329,6 +351,7 @@ function renderRoomSetup(number, challenge, reminders) {
       <p class="page-ref">Read the room's opening on p. ${challenge.page}, then set up the table.</p>
       ${renderRoomTable(number, { isSettingUp: true })}
       ${renderReminders(reminders)}
+      ${renderPartyLine()}
       <div class="action-bar"><button class="primary" data-action="beginChallenge">Begin challenge →</button></div>
     </section>`;
 }
@@ -496,9 +519,11 @@ function renderCrew() {
   if (!state.run) return renderCrewForm({ draftName: 'newCrew', isFirstCrew: true });
   if (ui.isAddingCrew) return renderCrewForm({ draftName: 'newCrew' });
   const run = state.run;
-  const canAddCrew = !run.ended && run.crews.length < store.MAX_CREWS;
-  return `${renderSetOutBar()}${run.crews.map(renderCrewGroup).join('')}
-    ${canAddCrew ? `<button data-action="startAddingCrew">+ Add another crew to the party (${run.crews.length}/${store.MAX_CREWS})</button>` : ''}
+  const addCrewButton = !run.ended && run.crews.length < store.MAX_CREWS
+    ? `<button data-action="startAddingCrew">+ Add another crew to the party (${run.crews.length}/${store.MAX_CREWS})</button>` : '';
+  // at the top too: a long roster pushes the button far down, and co-op starts here
+  return `${renderSetOutBar()}${addCrewButton}${run.crews.map(renderCrewGroup).join('')}
+    ${addCrewButton}
     ${renderSetOutBar()}`;
 }
 
@@ -933,6 +958,7 @@ const actions = {
   },
   cancelTemplateEdit: () => { ui.editingTemplateId = null; ui.templateDraft = null; },
   startAddingCrew: () => { ui.isAddingCrew = true; },
+  addCrewToParty: () => { ui.isAddingCrew = true; ui.tab = 'crew'; },
   cancelAddingCrew: () => { ui.isAddingCrew = false; },
   removeCrew: ({ crewId }) => { store.removeCrew(state, crewId); ui.postGame = null; },
   addMember: ({ crew }) => {

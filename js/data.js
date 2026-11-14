@@ -117,6 +117,15 @@ export const AGENDAS = {
   medicine: { name: 'Medicine', partsNeeded: 2, onCompletion: 'Add one piece of Medical Equipment (p. 36).' },
 };
 
+// What changes with two or more crews in one party (the book's co-op rules), in this app's own words with page references
+export const COOP_REMINDERS = [
+  'Each player runs their own crew, but all players are friends: they may help each other, for example healing the other crew (p. 7).',
+  'The players always go first. Each activation is one crew member from any crew, and either player may roll to keep the initiative (p. 13).',
+  'Anything a room gives "per crew" counts the crews that take part. This app multiplies enemy numbers for you and leaves out a crew with nobody able to play.',
+  'Hidden enemies: each crew picks one of its members for the single spotting test (p. 22).',
+  'Set-up: all crews place their models anywhere in the start zone, after terrain, objectives and enemies (p. 44).',
+];
+
 // d12 needed to keep the initiative for the 2nd, 3rd and every later activation in a turn (p. 14)
 const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
 

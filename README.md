@@ -6,7 +6,7 @@ A tiny, free, offline-friendly campaign companion for the miniatures game
 It replaces the paper roster and the "wait, which room were we in?" notes:
 
 - **Playthroughs** — keep several named campaigns side by side (solo, co-op, a second try): each has its own crew, route, log, agenda progress and station legacy. Switch from the header.
-- **Party** — 1 to 4 crews in one playthrough (two players, say): they travel together, each with its own roster, XP and agenda. Enemy counts follow the number of crews, and the co-op stat bars light up.
+- **Party** — 1 to 4 crews in one playthrough (two players, say): they travel together, each with its own roster, XP and agenda. Enemy counts follow the number of crews, the co-op stat bars light up, and a "Co-op" note in each room lists what changes with several crews (and, with the private room text, the room's own rules about crews). Add a crew from the Crew tab or from the room set-up.
 - **Sync (optional)** — keep a copy of every playthrough in your own free Supabase database, behind your password and a TOTP code, so a cleared browser or a new phone loses nothing ([`docs/SYNC.md`](docs/SYNC.md)). Off until you set it up; nothing leaves the browser without it.
 - **Journey** — where your crew is, which exits are open, where you can backtrack to, and what is sealed behind you.
 - **Station map** — a map that fills in as you explore: your route, sealed sections, where crew members fell, and the faint trails of crews that came before.

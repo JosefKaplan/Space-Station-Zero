@@ -296,3 +296,11 @@ Saves can mirror to the owner's own Supabase project (`js/cloud-sync.js`, setup 
   `sanitizedStartingGear` in `js/state.js` drops anything the current ship and edge do not allow.
 - **Syncing.** The list travels as one extra row (id `crew-templates`) in the same cloud table as the playthroughs;
   newest change wins, like a playthrough.
+
+## 13. Co-op notes
+
+With two or more crews that can play the room, the room card gets a folded "Co-op" note: the book's co-op rules in this app's
+own words with page references (`COOP_REMINDERS` in `js/data.js`), and, when the private room text is loaded, the sentences of
+that room's rules that speak of crews, picked out by a pattern so nothing that depends on the number of crews is missed.
+Numbers are still computed only where they are data (enemies "per crew"). Skirmish challenges (crews against each other)
+are a different mode and are not covered.
