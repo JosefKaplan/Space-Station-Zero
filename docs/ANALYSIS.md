@@ -304,3 +304,41 @@ own words with page references (`COOP_REMINDERS` in `js/data.js`), and, when the
 that room's rules that speak of crews, picked out by a pattern so nothing that depends on the number of crews is missed.
 Numbers are still computed only where they are data (enemies "per crew"). Skirmish challenges (crews against each other)
 are a different mode and are not covered.
+
+## 14. Versus (skirmish) mode
+
+Source: p. 100–112. In a skirmish, crews fight each other instead of exploring; each of the six challenges has a start area per
+player, markers, one obstacle and a way to score.
+
+**What the book says (rules, not wording).** Skirmish games use the standard rules with these changes: a d12 roll-off (ties
+roll again) decides the first activation, with clockwise activations for more than two players; a roll-off decides who is Crew 1 to 4
+(their start areas); commanders should be within 3 experience of each other; terrain is random (p. 43), there is no preset
+terrain. Every challenge is for two to four players and ends after the fifth turn. The d12 table: 1–2 Resource War, 3–4 Base
+Attack, 5–6 Code Raiders, 7–8 Sealed In, 9–10 Environmental Controls, 11–12 The Lab. Scoring, per turn unless noted:
+
+| Challenge | Victory points |
+|---|---|
+| Resource War | 1 per resource token controlled; 1 per Uncertain Floors test passed |
+| Base Attack | no points: most non-drone crew members in the defenders' territory at the end of turn 5; the attacker goes first |
+| Code Raiders | 1 per information node controlled; 1 per node hacked |
+| Sealed In | 1 per enemy put Out of Action; 2 per turret disabled or taken over |
+| Environmental Controls | 2 per control system held; 1 per enemy crew member put Out of Action |
+| The Lab | 2 per Experiment Vat halted; 1 per Deranged Mutant put Out of Action |
+
+The book also offers, for skirmish campaigns, the normal post-game steps and an optional rule that an injury roll of 6–11 (Dead) counts as
+12–17 (Full Recovery).
+
+**What the app does.** `state.versus = { match, history }` per playthrough (so it syncs with it; the playthrough's `schemaVersion` is 7).
+A `match` is the pure data in `js/skirmish.js`: players, start order, roles (Base Attack), first player, phase
+(setup → playing → finished), turn, this turn's counts, finished turns' counts, random terrain. The app counts: points
+come from the counts, a turn is closed with "End turn" (and can be taken back), a `finalOnly` line (Base Attack) counts only on
+the last turn, and the winner is the highest total (all on the top total share a win). The challenge facts (names, pages, scoring,
+start areas, marker positions, stat numbers of the drones, turrets and mutants) are data in `js/data.js`
+(`SKIRMISH_CHALLENGES`); the start areas and markers were measured from the book's six maps (board 30" × 22", as in the campaign).
+Markers that depend on the number of players (`minPlayers`, `forPlayer`: one turret per crew, three vats per crew) appear only for
+the players taking part. The book's own text of each challenge is private (`local/skirmish-texts.json` via `local/extract-skirmish-texts.py`,
+carried in `local/crew-rules.json` as `skirmishes`) and shown in a folded section when loaded.
+
+**Not covered.** Vat wake-up progress and the turrets' and mutants' own activations are played at the table, not tracked.
+Players are people at the table, not campaign crews: the match does not track life or equipment. With three players Base Attack
+is split one attacker against two defenders, because the book only describes one or two of each.

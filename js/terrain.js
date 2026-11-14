@@ -258,6 +258,9 @@ function fixedTerrainSvg(piece, fallbackTag) {
   return rectangleSvg(`fixed-terrain ${look}`, piece, lines, { showSize: look !== 'hatched', info });
 }
 
+// the places crew models set up: one zone in a campaign room, one per player in a versus match
+export const crewZonesOf = (roomLayout) => roomLayout.crewZones ?? (roomLayout.crewZone ? [roomLayout.crewZone] : []);
+
 function markerSvg(marker) {
   const centreX = inchesToSvg(marker.x);
   const centreY = inchesToSvg(marker.y);
@@ -268,7 +271,7 @@ function markerSvg(marker) {
   }
   const radius = inchesToSvg(marker.diameter) / 2;
   const labelSize = Math.min(10, Math.max(5.5, (radius * 2 * 1.6) / (marker.label.length + 1)));
-  const markerInfo = `${marker.label} · objective · ${marker.diameter}″ circle · centre ${edgeDistancesText(pointAsBox(marker))}`;
+  const markerInfo = `${marker.label}${marker.note ? ` (${marker.note})` : ''} · objective · ${marker.diameter}″ circle · centre ${edgeDistancesText(pointAsBox(marker))}`;
   return `<g class="marker"${infoAttributes(markerInfo, pointAsBox(marker))}><circle class="ping" cx="${centreX}" cy="${centreY}" r="${radius}"/><circle cx="${centreX}" cy="${centreY}" r="${radius}"/>${textLinesSvg(centreX, centreY, [{ text: marker.label, size: labelSize, bold: true }])}</g>`;
 }
 
@@ -276,10 +279,11 @@ function markerSvg(marker) {
 function roomLayoutSvg(roomLayout, { enemyCaptions = {}, crewCaption = '' } = {}) {
   const hatchedAndGray = (roomLayout.fixedTerrain ?? []).map((piece, index) => ({ piece, index })).filter(({ piece }) => piece.look === 'hatched' || piece.look === 'gray');
   const solidObjects = (roomLayout.fixedTerrain ?? []).map((piece, index) => ({ piece, index })).filter(({ piece }) => !hatchedAndGray.some((other) => other.piece === piece));
-  const crewZone = roomLayout.crewZone;
-  const crewZoneParts = crewZone
-    ? rectangleParts('crew-zone', crewZone, [{ text: crewZone.label && crewZone.label !== 'Start' ? crewZone.label : 'YOUR CREW', size: 12, bold: true }, ...(crewCaption ? [{ text: crewCaption, size: 8 }] : []), { text: 'sets up here', size: 7.5 }],
-      { info: `Your crew · ${crewCaption || 'models'} set up anywhere inside this zone · ${sizeCaption(crewZone)} · ${edgeDistancesText(crewZone)}` }) : { shape: '', labels: '' };
+  const crewZoneParts = crewZonesOf(roomLayout).map((crewZone) => {
+    const caption = crewZone.caption ?? crewCaption;
+    return rectangleParts('crew-zone', crewZone, [{ text: crewZone.label && crewZone.label !== 'Start' ? crewZone.label : 'YOUR CREW', size: 12, bold: true }, ...(caption ? [{ text: caption, size: 8 }] : []), { text: 'sets up here', size: 7.5 }],
+      { info: `${crewZone.owner ?? 'Your crew'} · ${caption || 'models'} set up anywhere inside this zone · ${sizeCaption(crewZone)} · ${edgeDistancesText(crewZone)}` });
+  });
   const enemyAreaParts = (roomLayout.enemyAreas ?? []).map((area, index) => {
     const tag = area.label ?? `E${index + 1}`;
     const captionLines = fittingCaptionLines(enemyCaptions[tag] ?? [], inchesToSvg(area.width) - 8, inchesToSvg(area.height) - ENEMY_LABEL_HEIGHT - SIZE_CAPTION_HEIGHT);
@@ -287,7 +291,7 @@ function roomLayoutSvg(roomLayout, { enemyCaptions = {}, crewCaption = '' } = {}
     return rectangleParts('enemy-area', area, [{ text: tag, size: 13, bold: true }, ...captionLines],
       { info: `${tag} · enemy area · ${enemies || 'enemies set up here'} · ${sizeCaption(area)} · ${edgeDistancesText(area)}` });
   });
-  const zoneParts = [crewZoneParts, ...enemyAreaParts];
+  const zoneParts = [...crewZoneParts, ...enemyAreaParts];
   return {
     underneath: [...hatchedAndGray, ...solidObjects].map(({ piece, index }) => fixedTerrainSvg(piece, `F${index + 1}`)).join('')
       + zoneParts.map((parts) => parts.shape).join(''),
@@ -317,7 +321,7 @@ export function renderMeasurementLinesSvg([x, y, width, height]) {
 export function renderBoardSvg(terrain, roomLayout, captions = {}) {
   const width = BOARD_WIDTH_INCHES * SVG_UNITS_PER_INCH;
   const height = BOARD_HEIGHT_INCHES * SVG_UNITS_PER_INCH;
-  const zones = roomLayout ? [roomLayout.crewZone, ...(roomLayout.enemyAreas ?? [])].filter(Boolean) : [];
+  const zones = roomLayout ? [...crewZonesOf(roomLayout), ...(roomLayout.enemyAreas ?? [])] : [];
   const layoutSvg = roomLayout ? roomLayoutSvg(roomLayout, captions) : { underneath: '', zoneLabels: '', onTop: '' };
   const piecesSvg = (terrain?.pieces ?? []).map((piece, pieceIndex) => {
     const side = piece.size * SVG_UNITS_PER_INCH;
@@ -362,9 +366,9 @@ export function roomLayoutLines(roomLayout) {
     text: marker.diameter ? `${marker.diameter}" circle, centre` : 'point',
     where: edgeDistancesText(pointAsBox(marker)).replace('from the edges: ', ''),
   }));
-  const crewZone = roomLayout.crewZone ? [{ label: 'Start', ...roomLayout.crewZone }] : [];
+  const crewZones = crewZonesOf(roomLayout).map((zone) => ({ label: 'Start', ...zone }));
   return [
-    ...rectangleLines('Your crew starts here', crewZone, 'Zone', 'Start'),
+    ...rectangleLines('Your crew starts here', crewZones, 'Zone', 'Start'),
     ...rectangleLines('Enemy areas', roomLayout.enemyAreas, 'Enemy area', 'E'),
     ...rectangleLines('Fixed terrain (part of the room)', roomLayout.fixedTerrain, 'Fixed terrain', 'F'),
     ...markerLines,

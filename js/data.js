@@ -126,6 +126,103 @@ export const COOP_REMINDERS = [
   'Set-up: all crews place their models anywhere in the start zone, after terrain, objectives and enemies (p. 44).',
 ];
 
+// ---------- skirmish (versus) challenges, p. 100–112 ----------
+// Crews fight each other instead of exploring. Numbers, names and page references only; the book's wording of each
+// challenge is in the private local file (CLAUDE.md rule 1). Positions are inches on the board, origin top-left.
+
+export const SKIRMISH_TURNS = 5;                    // each skirmish ends after this many turns (p. 102 onwards)
+export const SKIRMISH_COMMANDER_XP_TOLERANCE = 3;   // commanders should be within this much experience (p. 100)
+
+// The start areas of Player One to Four as [x, y, width, height]: One top left, Two bottom right, Three top right, Four bottom left
+const START_AREAS_8_BY_6 = [[0, 0, 8, 6], [22, 16, 8, 6], [22, 0, 8, 6], [0, 16, 8, 6]];
+const START_AREAS_6_BY_6_INSET = [[5, 0, 6, 6], [19, 16, 6, 6], [19, 0, 6, 6], [5, 16, 6, 6]];
+const START_AREAS_6_BY_6_CORNERS = [[0, 0, 6, 6], [24, 16, 6, 6], [24, 0, 6, 6], [0, 16, 6, 6]];
+const CHALLENGE_MARKER_DIAMETER = 1.25;
+const markerAt = (label, x, y, extra = {}) => ({ label, x, y, diameter: CHALLENGE_MARKER_DIAMETER, ...extra });
+
+// `scoring`: what a crew counts each turn (`vp` points each; `finalOnly`: counted once, at the end of the last turn).
+// Markers: `minPlayers` appears from that many players on, `forPlayer` only when that player takes part.
+export const SKIRMISH_CHALLENGES = {
+  'resource-war': {
+    name: 'Resource War', page: 101, rollOnD12: [1, 2], players: [2, 4], startAreas: START_AREAS_8_BY_6,
+    goal: 'Most Victory Points after the last turn.',
+    obstacle: 'Uncertain Floors',
+    scoring: [
+      { key: 'tokens', label: 'Resource tokens your crew controls', vp: 1 },
+      { key: 'floors', label: 'Uncertain Floors tests your crew passed', vp: 1 },
+    ],
+    markers: [],
+  },
+  'base-attack': {
+    name: 'Base Attack', page: 103, rollOnD12: [3, 4], players: [2, 4],
+    // attackers on the left, defenders on the right; each side has a first and a second area
+    attackerAreas: [[0, 0, 5, 8], [0, 14, 5, 8]], defenderAreas: [[25, 14, 5, 8], [25, 0, 5, 8]],
+    goal: 'Most of your non-drone crew members in the defenders\' territory at the end of the last turn.',
+    obstacle: 'Guard Drones',
+    scoring: [{ key: 'inTerritory', label: 'Your non-drone crew members in the defenders\' territory', vp: 1, finalOnly: true }],
+    stats: [{ name: 'Guard Drone', lf: 16, mv: 5, co: 4, re: 4, in: 2, armor: '6' }],
+    markers: [],
+  },
+  'code-raiders': {
+    name: 'Code Raiders', page: 105, rollOnD12: [5, 6], players: [2, 4], startAreas: START_AREAS_8_BY_6,
+    goal: 'Most Victory Points after the last turn.',
+    obstacle: 'Gas Leak',
+    scoring: [
+      { key: 'nodesControlled', label: 'Information nodes your crew controls', vp: 1 },
+      { key: 'nodesHacked', label: 'Information nodes your crew hacked', vp: 1 },
+    ],
+    markers: [markerAt('IT', 15, 5.5), markerAt('IT', 5.5, 11), markerAt('IT', 24.5, 11), markerAt('IT', 15, 16.5)],
+  },
+  'sealed-in': {
+    name: 'Sealed In', page: 106, rollOnD12: [7, 8], players: [2, 4], startAreas: START_AREAS_6_BY_6_INSET,
+    goal: 'Most Victory Points after the last turn.',
+    obstacle: 'Defensive Turrets (one per crew)',
+    scoring: [
+      { key: 'outOfAction', label: 'Enemies your crew put Out of Action this turn', vp: 1 },
+      { key: 'turrets', label: 'Turrets your crew disabled or took control of', vp: 2 },
+    ],
+    stats: [{ name: 'Defensive Turret', lf: 10, mv: 0, co: 3, re: 0, in: 0, armor: '4' }],
+    markers: [markerAt('T1', 19.5, 11, { minPlayers: 1 }), markerAt('T2', 10.5, 11, { minPlayers: 2 }),
+      markerAt('T3', 15, 16.5, { minPlayers: 3 }), markerAt('T4', 15, 5.5, { minPlayers: 4 })],
+  },
+  'environmental-controls': {
+    name: 'Environmental Controls', page: 108, rollOnD12: [9, 10], players: [2, 4], startAreas: START_AREAS_6_BY_6_INSET,
+    goal: 'Most Victory Points after the last turn.',
+    obstacle: 'Automated Defenses',
+    scoring: [
+      { key: 'systems', label: 'Environment Control Systems your crew controls', vp: 2 },
+      { key: 'outOfAction', label: 'Enemy crew members your crew put Out of Action', vp: 1 },
+    ],
+    markers: [markerAt('EC', 15, 5.5), markerAt('EC', 15, 16.5)],
+  },
+  'the-lab': {
+    name: 'The Lab', page: 110, rollOnD12: [11, 12], players: [2, 4], startAreas: START_AREAS_6_BY_6_CORNERS,
+    goal: 'Most Victory Points after the last turn.',
+    obstacle: 'Experiments (Experiment Vats and Deranged Mutants)',
+    scoring: [
+      { key: 'vatsHalted', label: 'Experiment Vats your crew halted (set to 0)', vp: 2 },
+      { key: 'mutants', label: 'Deranged Mutants your crew put Out of Action', vp: 1 },
+    ],
+    stats: [{ name: 'Deranged Mutant', lf: 9, mv: 7, co: 3, re: 3, in: 1 }],
+    // each crew's three vats sit near its start area; the right-hand sets read EV3 EV2 EV1 from the left
+    markers: [
+      ...[['EV1', 7.6], ['EV2', 9.8], ['EV3', 12]].map(([label, x]) => markerAt(label, x, 7.6, { forPlayer: 1, diameter: 1.5, note: 'Player One' })),
+      ...[['EV3', 18], ['EV2', 20.2], ['EV1', 22.4]].map(([label, x]) => markerAt(label, x, 14.4, { forPlayer: 2, diameter: 1.5, note: 'Player Two' })),
+      ...[['EV3', 18], ['EV2', 20.2], ['EV1', 22.4]].map(([label, x]) => markerAt(label, x, 7.6, { forPlayer: 3, diameter: 1.5, note: 'Player Three' })),
+      ...[['EV1', 7.6], ['EV2', 9.8], ['EV3', 12]].map(([label, x]) => markerAt(label, x, 14.4, { forPlayer: 4, diameter: 1.5, note: 'Player Four' })),
+    ],
+  },
+};
+
+// What differs from the standard game in a skirmish (p. 100–101), in this app's own words
+export const SKIRMISH_REMINDERS = [
+  'Nobody is guaranteed the first activation: every player rolls a d12 (ties roll again) and the highest goes first. With more than two players activations go clockwise (p. 100).',
+  'Players roll off again to become Crew 1, 2, 3 and 4, which decides who takes which start area (p. 100).',
+  'Crews should be evenly matched: commanders within 3 experience of each other. Brand new crews are best (p. 100).',
+  'No preset terrain: roll the random terrain (p. 43) around the start areas and objectives.',
+  'Playing several skirmishes as a campaign? Use the normal post-game steps (p. 40). Optional for fairness (p. 101): an injury roll of 6–11 (Dead) counts as 12–17 (Full Recovery).',
+];
+
 // d12 needed to keep the initiative for the 2nd, 3rd and every later activation in a turn (p. 14)
 const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
 

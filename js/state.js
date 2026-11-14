@@ -2,12 +2,13 @@
 import {
   ABILITY_PAGES, AGENDAS, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_ADVANCEMENTS, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_ADVANCEMENTS, CREW_TYPES, INJURY_ROLL_MAX, INJURY_ROLL_MIN, MAX_LEGACY_COUNT,
-  SHIP_TYPES, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, equipmentLine, injuryOutcomeForRoll, startingGearRules,
+  SHIP_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_TURNS, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, equipmentLine, injuryOutcomeForRoll,
+  startingGearRules,
 } from './data.js';
 import { isValidTerrain } from './terrain.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 6;   // of one playthrough's state (station + run)
+const SCHEMA_VERSION = 7;   // of one playthrough's state (station + run + versus)
 const STORE_VERSION = 7;    // of what is saved: a list of named playthroughs and the saved starting crews
 const MAX_PLAYTHROUGH_NAME_LENGTH = 40;
 export const MAX_CREWS = 4;   // crews travelling together in one playthrough
@@ -19,6 +20,8 @@ function createEmptyState() {
     // station survives across crews; run is one crew's campaign
     station: { agendaProgress: {}, legacyCount: 0, pastCrews: [] },
     run: null,
+    // versus (skirmish) matches, played apart from the campaign (js/skirmish.js): the match being played, and finished ones
+    versus: { match: null, history: [] },
   };
 }
 
@@ -76,6 +79,12 @@ function migrateFromVersion5(saved) {
   saved.schemaVersion = 6;
 }
 
+// 6 had no versus matches
+function migrateFromVersion6(saved) {
+  saved.versus = { match: null, history: [] };
+  saved.schemaVersion = 7;
+}
+
 function requireValid(condition, what) {
   if (!condition) throw new Error(`Save data is damaged: ${what}.`);
 }
@@ -86,6 +95,23 @@ const isChallengeNumber = (value) => Number.isInteger(value) && value in CHALLEN
 const isChallengeList = (value) => Array.isArray(value) && value.every(isChallengeNumber);
 
 // A save that passes here can be rendered without crashing, and holds nothing but plain text and numbers.
+function assertValidVersus(versus) {
+  requireValid(isPlainObject(versus) && Array.isArray(versus.history) && versus.history.every((record) => isPlainObject(record)
+    && record.challengeKey in SKIRMISH_CHALLENGES && Array.isArray(record.players) && Array.isArray(record.winners)), 'versus history');
+  const match = versus.match;
+  if (match === null) return;
+  const challenge = SKIRMISH_CHALLENGES[match?.challengeKey];
+  requireValid(isPlainObject(match) && challenge && Array.isArray(match.players) && match.players.length >= challenge.players[0]
+    && match.players.length <= challenge.players[1] && match.players.every((player) => isPlainObject(player) && typeof player.id === 'string' && typeof player.name === 'string'), 'versus match');
+  const playerIds = match.players.map((player) => player.id);
+  requireValid(Array.isArray(match.order) && match.order.length === playerIds.length && match.order.every((id) => playerIds.includes(id)), 'versus start order');
+  requireValid(['setup', 'playing', 'finished'].includes(match.phase) && Number.isInteger(match.turn) && match.turn >= 1 && match.turn <= SKIRMISH_TURNS, 'versus turn');
+  requireValid(match.firstPlayerId === null || playerIds.includes(match.firstPlayerId), 'versus first player');
+  requireValid(isPlainObject(match.counts) && Array.isArray(match.turns) && match.turns.length <= SKIRMISH_TURNS, 'versus scores');
+  requireValid(match.roles === null || (Array.isArray(match.roles) && match.roles.every((entry) => playerIds.includes(entry.playerId))), 'versus roles');
+  requireValid(match.terrain === null || isValidTerrain(match.terrain), 'versus terrain');
+}
+
 function assertValidState(saved) {
   const { station, run } = saved;
   requireValid(isPlainObject(station), 'station is missing');
@@ -97,6 +123,7 @@ function assertValidState(saved) {
     && isCount(crew.challengesCleared) && isChallengeList(crew.route) && Array.isArray(crew.fallen)
     && crew.fallen.every((entry) => isPlainObject(entry) && typeof entry.name === 'string'
       && (entry.challenge === null || isChallengeNumber(entry.challenge)))), 'previous crews');
+  assertValidVersus(saved.versus);
   if (run === null) return;
 
   requireValid(isPlainObject(run) && Array.isArray(run.crews) && run.crews.length >= 1 && run.crews.length <= MAX_CREWS, 'the crews');
@@ -132,7 +159,7 @@ function assertValidState(saved) {
 
 // one playthrough's state, brought up to the current version and checked
 function migratedState(saved) {
-  if (!isPlainObject(saved) || ![1, 2, 3, 4, 5, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+  if (!isPlainObject(saved) || ![1, 2, 3, 4, 5, 6, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
@@ -140,6 +167,7 @@ function migratedState(saved) {
   if (saved.schemaVersion === 3) migrateFromVersion3(saved);
   if (saved.schemaVersion === 4) migrateFromVersion4(saved);
   if (saved.schemaVersion === 5) migrateFromVersion5(saved);
+  if (saved.schemaVersion === 6) migrateFromVersion6(saved);
   assertValidState(saved);
   return saved;
 }

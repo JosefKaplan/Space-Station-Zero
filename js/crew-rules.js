@@ -19,6 +19,11 @@ function parseCrewRules(text) {
       if (typeof description !== 'string' || !description) throw new Error(`${section}.${name} must be a non-empty text`);
     }
   }
+  // the skirmish challenges' text (optional: older files have none): { lore, sections: [{ title, blocks }] } per challenge
+  rules.skirmishes ??= {};
+  for (const [key, entry] of Object.entries(rules.skirmishes)) {
+    if (typeof entry?.lore !== 'string' || !Array.isArray(entry.sections)) throw new Error(`skirmishes.${key} needs "lore" and "sections"`);
+  }
   for (const [name, item] of Object.entries(rules.equipment)) {
     if (typeof item?.text !== 'string' || !item.text || typeof item.tags !== 'string') throw new Error(`equipment.${name} needs "tags" and "text"`);
   }

@@ -5,6 +5,7 @@
 // app is served from the project folder and merged over the footprints. Both are kept in this browser's localStorage.
 // All numbers are inches on the board as the book prints it (30" across, 22" deep), measured from its top-left corner.
 import { BOARD_HEIGHT_INCHES, BOARD_WIDTH_INCHES, CHALLENGES } from './data.js';
+import { crewZonesOf } from './terrain.js';
 
 const ROOM_LAYOUTS_STORAGE_KEY = 'ssz-room-layouts';
 const ROOM_LAYOUTS_SCHEMA_VERSION = 2;
@@ -179,7 +180,7 @@ export function obstaclesForRandomTerrain(roomLayout) {
   const circularMarkers = (roomLayout.markers ?? []).filter((marker) => marker.diameter !== undefined).map((marker) => ({
     x: marker.x - marker.diameter / 2, y: marker.y - marker.diameter / 2, width: marker.diameter, height: marker.diameter,
   }));
-  const zones = [roomLayout.crewZone, ...(roomLayout.enemyAreas ?? [])].filter(Boolean);
+  const zones = [...crewZonesOf(roomLayout), ...(roomLayout.enemyAreas ?? [])];
   const zonesToKeepFree = zones.map((zone) => ({ ...zone, minGap: 0, soft: true }));
   // the middle of a zone holds its label and captions on the sketch: never covered, even as a last resort
   const labelBoxes = zones.map((zone) => ({

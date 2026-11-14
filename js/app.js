@@ -2,13 +2,14 @@
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
-  COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
+  COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, CREW_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_COMMANDER_XP_TOLERANCE, SKIRMISH_REMINDERS, SKIRMISH_TURNS, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS, startingGearRules,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as cloud from './cloud-sync.js';
 import { checkedCrewRules, fetchLocalCrewRules, forgetCrewRules, loadCrewRules, ruleNotesMentionedIn, saveCrewRules } from './crew-rules.js';
+import * as skirmish from './skirmish.js';
 import * as store from './state.js';
 import {
   checkedPrivateRoomLayouts, fetchPrivateRoomLayouts, fetchPublicFootprints, loadRoomLayouts, mergeRoomLayouts, obstaclesForRandomTerrain,
@@ -16,8 +17,9 @@ import {
 } from './room-layouts.js';
 import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
-const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
+const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['versus', 'Versus'], ['settings', 'Settings']];
 const SYNC_PULL_INTERVAL_MS = 60 * 1000;
+const MAX_VERSUS_HISTORY = 20;
 const appElement = document.getElementById('app');
 
 let state = null;
@@ -59,11 +61,17 @@ const ui = {
   logNote: '',
   dice: { pool: 5, needed: '', target: '', rolled: null, isHelpOpen: false },
   // Settings → Starting crews: the section shown, and the saved starting crew being edited ('new' for a new one) with its form
+  // the versus start form: which skirmish challenge, how many players, their names (never saved)
+  versusDraft: blankVersusDraft(),
   settingsSection: 'general',
   editingTemplateId: null,
   templateDraft: null,
   newCrew: { size: 6, shipType: 'Exploration', edge: EDGES[0], memberTypes: Array(8).fill('Soldier'), ...blankCrewFormFields() },
 };
+
+function blankVersusDraft() {
+  return { challengeKey: '', playerCount: 2, names: ['', '', '', ''] };
+}
 
 // what the creator form starts from for each new crew (size, ship, edge and the crew types are kept between crews)
 function blankCrewFormFields() {
@@ -843,12 +851,141 @@ function renderSettings() {
     <section class="card"><p class="hint">Unofficial fan-made companion for Space Station Zero by Snarling Badger Studios. Contains no rules text — you need the rulebook to play.</p></section>`;
 }
 
+// ---------- versus (skirmish) ----------
+// Crews fighting each other on one of the book's skirmish challenges (p. 100–112). Apart from the campaign: a match lives in
+// `state.versus.match` (js/skirmish.js), and the players are people at the table, not crews of the campaign.
+
+const challengeOptions = () => Object.entries(SKIRMISH_CHALLENGES)
+  .map(([key, challenge]) => [key, `${challenge.name} (p. ${challenge.page}) · ${challenge.players[0]}–${challenge.players[1]} players`]);
+
+const SKIRMISH_BOOK_HINT = 'The book\'s own text for this challenge appears here when your private rules file is loaded.';
+
+function renderSkirmishBookText(key, title) {
+  const entry = crewRules?.skirmishes?.[key];
+  if (!entry) return '';
+  const lore = entry.lore ? `<p class="lore">${escapeHtml(entry.lore)}</p>` : '';
+  return `<details><summary>${escapeHtml(title)}</summary><div class="rules">${lore}${entry.sections.map(renderRulesSection).join('')}</div></details>`;
+}
+
+function renderVersusHistory() {
+  const history = state.versus.history;
+  if (history.length === 0) return '';
+  return `<section class="card"><h3>Earlier matches</h3><ul class="plain">${history.map((record) => (
+    `<li><b>${escapeHtml(SKIRMISH_CHALLENGES[record.challengeKey].name)}</b> — ${record.winners.length > 1 ? 'draw between ' : 'won by '}${escapeHtml(record.winners.join(' & '))}
+      <small>${record.players.map((player) => `${escapeHtml(player.name)} ${player.total}`).join(' · ')} · ${escapeHtml(new Date(record.finishedAt).toLocaleDateString())}</small></li>`)).join('')}</ul></section>`;
+}
+
+function renderVersusStart() {
+  const draft = ui.versusDraft;
+  const challenge = SKIRMISH_CHALLENGES[draft.challengeKey];
+  const [fewest, most] = challenge?.players ?? [2, 4];
+  const playerCount = Math.min(most, Math.max(fewest, draft.playerCount));
+  const playerOptions = Array.from({ length: most - fewest + 1 }, (_, index) => [fewest + index, `${fewest + index} players`]);
+  const nameInputs = Array.from({ length: playerCount }, (_, index) => `<label>Player ${index + 1}
+      <input placeholder="Player ${index + 1}" data-bind-ui="versusDraft.names.${index}" value="${escapeHtml(draft.names[index])}"></label>`).join('');
+  return `<section class="card form"><h2>Versus</h2>
+      <p class="hint">Crews fight each other instead of exploring (p. 100–112): pick a skirmish challenge, set up, and keep the score turn by turn. Bring one crew per player, ideally new ones of about equal strength: build them once under Settings → Starting crews.</p>
+      <label>Skirmish challenge<select data-bind-ui="versusDraft.challengeKey" data-rerender>${options([['', '— choose, or roll a d12 —'], ...challengeOptions()], draft.challengeKey)}</select></label>
+      <button data-action="versusRollChallenge">Roll a d12 for the challenge</button>
+      ${challenge ? `<p class="hint"><b>${escapeHtml(challenge.name)}:</b> ${escapeHtml(challenge.goal)} Obstacle: ${escapeHtml(challenge.obstacle)}.</p>` : ''}
+      <label>Players<select data-bind-ui="versusDraft.playerCount" data-rerender data-number>${options(playerOptions, playerCount)}</select></label>
+      ${nameInputs}
+      <button class="primary" data-action="versusStart">Set up the match</button></section>
+    ${renderSkirmishBookText('general', 'How skirmish games work (the book)')}
+    ${renderVersusHistory()}`;
+}
+
+function versusMatchBoard(match) {
+  const layout = skirmish.skirmishLayout(match);
+  const isFirstDrawOfNewTerrain = ui.isTerrainJustRolled;
+  ui.isTerrainJustRolled = false;
+  const legendEntries = [...(match.terrain ? [['random', 'random terrain']] : []), ['crew', 'start areas'], ...(layout.markers.length ? [['marker', 'objectives']] : [])];
+  return `${renderBoardSvg(match.terrain, layout, { focus: ui.boardFocus, dropIn: isFirstDrawOfNewTerrain })}
+    <p class="board-info" id="board-info">${escapeHtml(ui.boardInfo ?? BOARD_INFO_HINT)}</p>
+    <div class="legend">${legendEntries.map(([kind, label]) => (
+    `<button class="legend-item ${ui.boardFocus === kind ? 'active' : ''}" data-action="toggleBoardFocus" data-kind="${kind}" aria-pressed="${ui.boardFocus === kind}"><span class="swatch ${kind}"></span>${label}</button>`)).join('')}</div>
+    ${match.phase === 'setup' ? (match.terrain ? confirmButton('versusRollTerrain', 'Roll random terrain again') : '<button data-action="versusRollTerrain">Roll random terrain</button>') : ''}
+    ${match.terrain?.unplacedPieces?.length ? `<p class="hint terrain-unplaced">${match.terrain.unplacedPieces.length} random piece(s) marked "no room" do not fit 2" away from the start areas and objectives: put them where they fit.</p>` : ''}`;
+}
+
+// who plays from where: the start order (Crew 1, 2, ...) or, in Base Attack, the roles
+function renderVersusSeating(match) {
+  const nameOf = (playerId) => match.players.find((player) => player.id === playerId).name;
+  const isSetup = match.phase === 'setup';
+  if (match.roles) {
+    const sorted = [...match.roles].sort((a, b) => (a.role === b.role ? a.slot - b.slot : a.role === 'attacker' ? -1 : 1));
+    return `<ul class="plain">${sorted.map((entry) => `<li><b>${escapeHtml(nameOf(entry.playerId))}</b> — ${entry.role} ${entry.slot}${entry.role === 'attacker' && entry.slot === 1 ? ' <span class="chip ok">first activation</span>' : ''}</li>`).join('')}</ul>
+      ${match.players.length === 3 ? '<p class="hint">The book describes this challenge for one or two attackers and defenders; with three players the app splits one attacker against two defenders. Agree at the table if you would rather split it differently.</p>' : ''}
+      ${isSetup ? '<button data-action="versusRerollRoles">Re-roll the roles</button>' : ''}`;
+  }
+  const order = skirmish.activationOrder(match);
+  return `<ol class="plain seating">${match.order.map((playerId, index) => `<li><b>Crew ${index + 1}</b> · ${escapeHtml(nameOf(playerId))} <small>start area Player ${['One', 'Two', 'Three', 'Four'][index]}</small>${playerId === match.firstPlayerId ? ' <span class="chip ok">first activation</span>' : ''}</li>`).join('')}</ol>
+    ${match.firstPlayerId ? `<p class="hint">Activation order: ${order.map((playerId) => escapeHtml(nameOf(playerId))).join(' → ')} (clockwise round the table: sit in that order).</p>` : ''}
+    ${isSetup ? `<div class="row wrap"><button data-action="versusRandomiseOrder">Roll for start positions</button><button data-action="versusPickFirst">Roll for first activation</button></div>` : ''}`;
+}
+
+function renderVersusScoring(match) {
+  const challenge = SKIRMISH_CHALLENGES[match.challengeKey];
+  const lines = skirmish.scoringLinesOnTurn(challenge, match.turn);
+  const rows = skirmish.standings(match);
+  return `${rows.map(({ player, total, thisTurn, isLeading }) => `<section class="card versus-player${isLeading ? ' leading' : ''}">
+      <h3>${escapeHtml(player.name)} <span class="chip ${isLeading ? 'ok' : ''}">${total} VP</span>${thisTurn ? ` <span class="chip warn">+${thisTurn} this turn</span>` : ''}</h3>
+      ${lines.map((line) => `<div class="count-row"><span>${escapeHtml(line.label)} <small>× ${line.vp} VP</small></span>
+        <span class="counter"><button data-action="versusCount" data-player="${player.id}" data-line="${line.key}" data-delta="-1" aria-label="One fewer: ${escapeHtml(line.label)}">−</button>
+        <b>${match.counts[player.id][line.key] ?? 0}</b>
+        <button data-action="versusCount" data-player="${player.id}" data-line="${line.key}" data-delta="1" aria-label="One more: ${escapeHtml(line.label)}">+</button></span></div>`).join('')}
+    </section>`).join('')}
+    ${challenge.scoring.some((line) => line.finalOnly) && match.turn < SKIRMISH_TURNS ? '<p class="hint">Some of this challenge\'s score is counted once, at the end of the last turn; its counters appear then.</p>' : ''}`;
+}
+
+function renderVersusResult(match) {
+  const rows = skirmish.standings(match);
+  const winning = skirmish.winners(match);
+  return `<section class="card versus-result"><h3>${winning.length > 1 ? 'A draw' : 'Winner'}: ${escapeHtml(winning.map((player) => player.name).join(' & '))}</h3>
+    <div class="stats-wrap"><table class="rules-table"><thead><tr><th>Player</th>${match.turns.map((_, index) => `<th>T${index + 1}</th>`).join('')}<th>Total</th></tr></thead>
+    <tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.player.name)}</td>${row.perTurn.map((points) => `<td>${points}</td>`).join('')}<td><b>${row.total}</b></td></tr>`).join('')}</tbody></table></div></section>`;
+}
+
+function renderVersusMatch(match) {
+  const challenge = SKIRMISH_CHALLENGES[match.challengeKey];
+  const phaseChip = { setup: 'setting up', playing: `turn ${match.turn} of ${SKIRMISH_TURNS}`, finished: 'finished' }[match.phase];
+  const header = `<section class="card room"><p class="eyebrow">Skirmish · p. ${challenge.page} <span class="chip ${match.phase === 'finished' ? 'ok' : 'warn'}">${phaseChip}</span></p>
+      <h2>${escapeHtml(challenge.name)}</h2>
+      <p class="goal"><b>Goal:</b> ${escapeHtml(challenge.goal)}</p>
+      <p class="hint">Obstacle: ${escapeHtml(challenge.obstacle)}. Scoring: ${challenge.scoring.map((line) => `${escapeHtml(line.label.toLowerCase())} × ${line.vp}${line.finalOnly ? ' (at the end)' : ''}`).join('; ')}.</p>
+      ${renderEnemyStats(challenge.stats)}`;
+  const reminders = `<details><summary>What changes in a skirmish</summary><ul class="plain">${SKIRMISH_REMINDERS.map((reminder) => `<li>${escapeHtml(reminder)}</li>`).join('')}</ul></details>`;
+  const book = renderSkirmishBookText(match.challengeKey, 'The book\'s text for this challenge');
+  const abandon = confirmButton('versusAbandon', match.phase === 'finished' ? 'Discard this match' : 'Abandon this match');
+  if (match.phase === 'setup') {
+    return `${header}
+      <h4 class="plain-heading">Players</h4>${renderVersusSeating(match)}
+      <h4 class="plain-heading">Set up the table</h4>${versusMatchBoard(match)}
+      ${reminders}${book}
+      <div class="action-bar"><button class="primary" data-action="versusBegin">Start the match →</button></div>${abandon}</section>`;
+  }
+  if (match.phase === 'playing') {
+    return `${header}</section>
+      ${renderVersusScoring(match)}
+      <div class="action-bar"><button class="primary" data-action="versusEndTurn">${match.turn >= SKIRMISH_TURNS ? 'End the last turn and finish' : `End turn ${match.turn}`} →</button>
+        ${match.turns.length ? '<button data-action="versusUndoTurn">Take back the last turn</button>' : ''}</div>
+      <section class="card"><details><summary>Players, positions and map</summary>${renderVersusSeating(match)}${versusMatchBoard(match)}</details>${reminders}${book}${abandon}</section>`;
+  }
+  return `${header}</section>${renderVersusResult(match)}
+    <section class="card"><button class="primary" data-action="versusClose">Save to earlier matches</button>
+      <button data-action="versusUndoTurn">Take back the last turn</button>${abandon}</section>`;
+}
+
+function renderVersus() {
+  return state.versus.match ? renderVersusMatch(state.versus.match) : renderVersusStart();
+}
+
 // ---------- shell ----------
 
 // everything on screen that belonged to the previous playthrough (or to the save that was just replaced)
 function resetViewForOtherPlaythrough() {
   Object.assign(ui, { tab: 'journey', postGame: null, exitRoll: '', mapSelected: null, confirmKey: null, boardInfo: null, boardFocus: null,
-    isLoreOpen: true, isPlaythroughMenuOpen: false, isAddingCrew: false, newPlaythroughName: '' });
+    isLoreOpen: true, isPlaythroughMenuOpen: false, isAddingCrew: false, newPlaythroughName: '', versusDraft: blankVersusDraft() });
   roomOfBoardView = null;
 }
 
@@ -895,7 +1032,7 @@ function render() {
     return;
   }
   resetBoardViewWhenRoomChanged();
-  const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, settings: renderSettings };
+  const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, versus: renderVersus, settings: renderSettings };
   appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div>
       <button class="playthrough-button" data-action="togglePlaythroughMenu" aria-expanded="${ui.isPlaythroughMenuOpen}" aria-label="Playthroughs">
         <small>Playthrough</small>${escapeHtml(store.activePlaythroughName())} ▾</button></header>
@@ -937,6 +1074,42 @@ const actions = {
     ui.noticeMessage = `${replaced ? 'Updated' : 'Saved'} the starting crew "${recipe.name.trim()}". Use it from the Saved starting crews list for any campaign.`;
   },
   deleteCrewTemplate: ({ id }) => { store.deleteCrewTemplate(id); ui.noticeMessage = 'Deleted the saved starting crew.'; },
+  // versus (skirmish) matches: see renderVersus
+  versusRollChallenge: () => {
+    const roll = rollD12();
+    ui.versusDraft.challengeKey = skirmish.challengeKeyForRoll(roll);
+    ui.noticeMessage = `Rolled ${roll}: ${SKIRMISH_CHALLENGES[ui.versusDraft.challengeKey].name}.`;
+  },
+  versusStart: () => {
+    const { challengeKey, playerCount, names } = ui.versusDraft;
+    state.versus.match = skirmish.createMatch({ challengeKey, playerNames: names.slice(0, playerCount) });
+    ui.boardInfo = null;
+    ui.boardFocus = null;
+  },
+  versusRandomiseOrder: () => { skirmish.randomiseOrder(state.versus.match); },
+  versusRerollRoles: () => { skirmish.rerollRoles(state.versus.match); },
+  versusPickFirst: () => { skirmish.pickFirstPlayer(state.versus.match); },
+  versusRollTerrain: () => {
+    const match = state.versus.match;
+    match.terrain = generateTerrain(rollD12, obstaclesForRandomTerrain(skirmish.skirmishLayout(match)));
+    ui.isTerrainJustRolled = true;
+    ui.boardInfo = null;
+  },
+  versusBegin: () => { skirmish.beginMatch(state.versus.match); },
+  versusCount: ({ player, line, delta }) => { skirmish.changeCount(state.versus.match, player, line, Number(delta)); },
+  versusEndTurn: () => { skirmish.endTurn(state.versus.match); },
+  versusUndoTurn: () => { skirmish.undoTurn(state.versus.match); },
+  versusAbandon: () => { state.versus.match = null; ui.noticeMessage = 'Match discarded.'; },
+  // a finished match goes to the list of earlier ones
+  versusClose: () => {
+    const match = state.versus.match;
+    state.versus.history = [{
+      challengeKey: match.challengeKey, finishedAt: new Date().toISOString(),
+      players: skirmish.standings(match).map((row) => ({ name: row.player.name, total: row.total })),
+      winners: skirmish.winners(match).map((player) => player.name),
+    }, ...state.versus.history].slice(0, MAX_VERSUS_HISTORY);
+    state.versus.match = null;
+  },
   // Settings → Starting crews: made and edited without touching the running campaign
   showSettingsSection: ({ section }) => { ui.settingsSection = section; },
   newStartingCrew: () => {
