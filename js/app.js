@@ -152,7 +152,7 @@ function renderJourney() {
       <p class="page-ref">Rulebook p. ${challenge.page}</p>
       ${isCleared ? '' : renderRoomTable(number, { isSettingUp: false })}
       ${renderReminders(reminders)}
-      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="sticky-action"><button class="primary" data-action="openPostGame">Challenge over →</button>
+      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="action-bar"><button class="primary" data-action="openPostGame">Challenge over →</button>
         <button data-action="reopenRoomSetup">← Set-up</button></div>`)}
     </section>
     ${!isCleared && ui.postGame ? renderPostGame(challenge) : ''}
@@ -304,7 +304,7 @@ function renderRoomSetup(number, challenge, reminders) {
       <p class="page-ref">Read the room's opening on p. ${challenge.page}, then set up the table.</p>
       ${renderRoomTable(number, { isSettingUp: true })}
       ${renderReminders(reminders)}
-      <div class="sticky-action"><button class="primary" data-action="beginChallenge">Begin challenge →</button></div>
+      <div class="action-bar"><button class="primary" data-action="beginChallenge">Begin challenge →</button></div>
     </section>`;
 }
 

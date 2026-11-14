@@ -285,9 +285,9 @@ details[open] > summary::after { transform: rotate(180deg); }
 details[open] > summary { border-color: var(--accent); }
 summary:active { transform: translate(3px, 3px); box-shadow: none; }
 details > :not(summary) { margin-top: 8px; }
-.setout-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-raised); border: 2px solid var(--accent); }
-.sticky-action { position: sticky; bottom: 64px; z-index: 4; display: flex; gap: 8px; padding: 10px 0 4px; margin-top: 10px; background: linear-gradient(to top, var(--panel) 70%, transparent); }
-.sticky-action .primary { flex: 1; }
+.setout-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-raised); border: 2px solid var(--accent); }
+.action-bar { display: flex; gap: 8px; padding: 10px 0 4px; margin-top: 10px; }
+.action-bar .primary { flex: 1; }
 
 .spoiler-warning { margin: 8px 0; padding: 8px 10px; border: 2px solid var(--danger); background: rgba(255, 106, 85, .1); font-size: 14px; }
 .stats-wrap { overflow-x: auto; margin: 4px 0 8px; }
