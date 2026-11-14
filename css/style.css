@@ -15,7 +15,8 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --display: "Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
   --hard-shadow: 4px 4px 0 var(--ink);
-  color-scheme: dark;
+  color-scheme: only dark;
+  forced-color-adjust: none;
 }
 
 * { box-sizing: border-box; }
@@ -348,3 +349,16 @@ table.enemy-stats tbody th { text-align: left; font-weight: 700; color: var(--te
 .terrain-board .labels, .terrain-board .marker text { pointer-events: none; }
 .terrain-board [data-info]:hover :is(rect, circle:not(.ping)) { stroke-width: 3.5; filter: brightness(1.25); }
 .terrain-board .selected :is(rect, circle:not(.ping)) { stroke-width: 4; stroke: var(--text); filter: drop-shadow(0 0 5px var(--accent)); }
+
+.terrain-board .measure { pointer-events: none; }
+.terrain-board .measure line { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 2; }
+.terrain-board .measure circle { fill: var(--accent); }
+.terrain-board .measure text { fill: var(--accent); font-family: var(--mono), monospace; font-weight: 700; paint-order: stroke; stroke: var(--ink); stroke-width: 3px; stroke-linejoin: round; }
+.terrain-where { text-align: right; }
+
+/* explicit backgrounds and colours on what a browser might otherwise paint with its own defaults */
+.terrain-board { background: var(--field); }
+table.enemy-stats td, table.enemy-stats tbody th, table.rules-table td { background: var(--field); color: var(--text); }
+table.enemy-stats, table.rules-table, details, summary { forced-color-adjust: none; }
+.lore-box { margin-top: 10px; }
+.lore-box .lore { padding: 4px 2px 0; }

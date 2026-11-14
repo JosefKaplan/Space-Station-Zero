@@ -214,6 +214,9 @@ Room layouts (`js/room-layouts.js`, optional): the room's own footprint comes fr
   circular objectives ping, rolled pieces drop in (only on the render right after a roll). Taps on the map and the
   legend update it in place (`refreshBoardInteractions`) instead of re-rendering, so animations are not restarted
   and the tapped item stays lit (`.selected`). Neither state is saved.
+  The info line gives an item's distance from all four board edges, and dashed measuring lines with the distances are
+  drawn on the map from each edge to the tapped or hovered item (`renderMeasurementLinesSvg`, into `#board-measure`;
+  rectangles are measured to their sides, circular objectives and drop points to their centre).
 - Random terrain never covers the middle 80% × 60% of a zone (where its label sits); only the zone's edge can be
   overlapped, and such pieces are drawn translucent.
 - Not built: per-room versions of the layout.

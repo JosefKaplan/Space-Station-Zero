@@ -44,6 +44,8 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
 - Two layers of state, never mixed: **station** (persists across crews: completed agendas parts, legacy flags)
   and **run** (one crew's campaign). See `docs/ANALYSIS.md` § Data model.
 - Saved state carries a `schemaVersion`; changing the shape means writing a migration, not breaking old saves.
+- The look is fixed and must not depend on a device's dark/light setting: `color-scheme: only dark` (meta and CSS), explicit
+  backgrounds on the map and tables, no `prefers-color-scheme` rules.
 - Mobile first — it is used at the gaming table on a phone or tablet. Big tap targets, works offline once loaded.
 - Fail loudly: a corrupt save or bad import shows an error and keeps the old state; never silently reset.
 - Verbose, self-documenting names; comments only for the why.

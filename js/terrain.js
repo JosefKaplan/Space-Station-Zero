@@ -148,18 +148,21 @@ function pieceLetter(pieceIndex) {
 // measurements come off a printed map, so quarter inches at best: no float noise on screen
 const roundedInches = (inches) => Number(inches.toFixed(2));
 
-const distanceFromNearestEdgesOfPoint = (point) => distanceFromNearestEdges({ x: point.x, y: point.y, width: 0, height: 0 });
-
-function distanceFromNearestEdges(piece) {
+// how far a rectangle (or a point, when width and height are 0) is from each of the four board edges, in inches
+function edgeDistances(piece) {
   const rectangle = asRectangle(piece);
-  const fromRight = roundedInches(BOARD_WIDTH_INCHES - rectangle.x - rectangle.width);
-  const fromBottom = roundedInches(BOARD_HEIGHT_INCHES - rectangle.y - rectangle.height);
-  const x = roundedInches(rectangle.x);
-  const y = roundedInches(rectangle.y);
-  const sideways = x <= fromRight ? `left ${x}"` : `right ${fromRight}"`;
-  const lengthways = y <= fromBottom ? `top ${y}"` : `bottom ${fromBottom}"`;
-  return `${sideways} · ${lengthways}`;
+  return {
+    left: roundedInches(rectangle.x), right: roundedInches(BOARD_WIDTH_INCHES - rectangle.x - rectangle.width),
+    top: roundedInches(rectangle.y), bottom: roundedInches(BOARD_HEIGHT_INCHES - rectangle.y - rectangle.height),
+  };
 }
+
+function edgeDistancesText(piece) {
+  const { left, right, top, bottom } = edgeDistances(piece);
+  return `from the edges: left ${left}″ · right ${right}″ · top ${top}″ · bottom ${bottom}″`;
+}
+
+const pointAsBox = (point) => ({ x: point.x, y: point.y, width: 0, height: 0 });
 
 // one entry per quadrant, for the list under the sketch
 export function terrainPlacementsByQuadrant(terrain) {
@@ -169,7 +172,7 @@ export function terrainPlacementsByQuadrant(terrain) {
     unplacedFootprints: (terrain.unplacedPieces ?? []).filter((piece) => piece.quadrant === quadrant).map((piece) => `${piece.size}" × ${piece.size}"`),
     pieces: terrain.pieces.map((piece, pieceIndex) => ({ piece, pieceIndex })).filter(({ piece }) => piece.quadrant === quadrant)
       .map(({ piece, pieceIndex }) => ({
-        letter: pieceLetter(pieceIndex), footprint: `${piece.size}" × ${piece.size}"`, where: distanceFromNearestEdges(piece),
+        letter: pieceLetter(pieceIndex), footprint: `${piece.size}" × ${piece.size}"`, where: edgeDistancesText(piece).replace('from the edges: ', ''),
       })),
   }));
 }
@@ -224,7 +227,8 @@ function sizeCaption(rectangle) {
 // a labelled rectangle drawn like the book's maps: label in the middle, size in the corner.
 // Returned in two parts so a zone's label can be drawn above random terrain that happens to sit on it.
 // hover or tap: the app shows this text under the map (see showBoardInfo in app.js)
-const infoAttributes = (text) => ` data-action="showBoardInfo" data-info="${escapeSvgText(text)}"`;
+// `box` is where the item sits in inches (x y width height; a point has no size): the app draws measuring lines from it
+const infoAttributes = (text, box) => ` data-action="showBoardInfo" data-info="${escapeSvgText(text)}" data-box="${[box.x, box.y, box.width, box.height].map(roundedInches).join(' ')}"`;
 
 function rectangleParts(cssClass, rectangle, lines, { showSize = true, info = '' } = {}) {
   const x = inchesToSvg(rectangle.x);
@@ -234,7 +238,7 @@ function rectangleParts(cssClass, rectangle, lines, { showSize = true, info = ''
   const sizeSvg = showSize && width >= 45 && height >= 30
     ? `<text class="size" x="${x + width - 3}" y="${y + height - 3}" font-size="6.5">${escapeSvgText(sizeCaption(rectangle))}</text>` : '';
   return {
-    shape: `<g class="${cssClass}"${info ? infoAttributes(info) : ''}><rect x="${x}" y="${y}" width="${width}" height="${height}"/></g>`,
+    shape: `<g class="${cssClass}"${info ? infoAttributes(info, rectangle) : ''}><rect x="${x}" y="${y}" width="${width}" height="${height}"/></g>`,
     labels: `<g class="${cssClass} labels">${textLinesSvg(x + width / 2, y + height / 2, lines)}${sizeSvg}</g>`,
   };
 }
@@ -250,7 +254,7 @@ function fixedTerrainSvg(piece, fallbackTag) {
   // an unlabelled hatched area is printed bare on the maps
   const lines = look === 'hatched' && !piece.label ? [] : [{ text: piece.label ?? fallbackTag, size: labelSize, bold: true }];
   const name = piece.label ?? fallbackTag;
-  const info = `${name} · part of the room (${look === 'hatched' ? 'impassable' : 'fixed terrain'}) · ${sizeCaption(piece)} · ${distanceFromNearestEdges(piece)}`;
+  const info = `${name} · part of the room (${look === 'hatched' ? 'impassable' : 'fixed terrain'}) · ${sizeCaption(piece)} · ${edgeDistancesText(piece)}`;
   return rectangleSvg(`fixed-terrain ${look}`, piece, lines, { showSize: look !== 'hatched', info });
 }
 
@@ -259,13 +263,13 @@ function markerSvg(marker) {
   const centreY = inchesToSvg(marker.y);
   if (!marker.diameter) {
     // a point (a drop spot): a small dot with its label beside it, like the plain labels on the printed maps
-    return `<g class="marker point"${infoAttributes(`${marker.label} · drop point · ${distanceFromNearestEdgesOfPoint(marker)}`)}><circle cx="${centreX}" cy="${centreY}" r="2.5"/>
+    return `<g class="marker point"${infoAttributes(`${marker.label} · drop point · ${edgeDistancesText(pointAsBox(marker))}`, pointAsBox(marker))}><circle cx="${centreX}" cy="${centreY}" r="2.5"/>
       <text x="${centreX + 5}" y="${centreY}" font-size="8" class="start">${escapeSvgText(marker.label)}</text></g>`;
   }
   const radius = inchesToSvg(marker.diameter) / 2;
   const labelSize = Math.min(10, Math.max(5.5, (radius * 2 * 1.6) / (marker.label.length + 1)));
-  const markerInfo = `${marker.label} · objective · ${marker.diameter}″ circle · centre ${distanceFromNearestEdgesOfPoint(marker)}`;
-  return `<g class="marker"${infoAttributes(markerInfo)}><circle class="ping" cx="${centreX}" cy="${centreY}" r="${radius}"/><circle cx="${centreX}" cy="${centreY}" r="${radius}"/>${textLinesSvg(centreX, centreY, [{ text: marker.label, size: labelSize, bold: true }])}</g>`;
+  const markerInfo = `${marker.label} · objective · ${marker.diameter}″ circle · centre ${edgeDistancesText(pointAsBox(marker))}`;
+  return `<g class="marker"${infoAttributes(markerInfo, pointAsBox(marker))}><circle class="ping" cx="${centreX}" cy="${centreY}" r="${radius}"/><circle cx="${centreX}" cy="${centreY}" r="${radius}"/>${textLinesSvg(centreX, centreY, [{ text: marker.label, size: labelSize, bold: true }])}</g>`;
 }
 
 // options.enemyCaptions: area label -> ["2× Starving Mutants", ...]; options.crewCaption: e.g. "7 models"
@@ -275,13 +279,13 @@ function roomLayoutSvg(roomLayout, { enemyCaptions = {}, crewCaption = '' } = {}
   const crewZone = roomLayout.crewZone;
   const crewZoneParts = crewZone
     ? rectangleParts('crew-zone', crewZone, [{ text: crewZone.label && crewZone.label !== 'Start' ? crewZone.label : 'YOUR CREW', size: 12, bold: true }, ...(crewCaption ? [{ text: crewCaption, size: 8 }] : []), { text: 'sets up here', size: 7.5 }],
-      { info: `Your crew · ${crewCaption || 'models'} set up anywhere inside this zone · ${sizeCaption(crewZone)} · ${distanceFromNearestEdges(crewZone)}` }) : { shape: '', labels: '' };
+      { info: `Your crew · ${crewCaption || 'models'} set up anywhere inside this zone · ${sizeCaption(crewZone)} · ${edgeDistancesText(crewZone)}` }) : { shape: '', labels: '' };
   const enemyAreaParts = (roomLayout.enemyAreas ?? []).map((area, index) => {
     const tag = area.label ?? `E${index + 1}`;
     const captionLines = fittingCaptionLines(enemyCaptions[tag] ?? [], inchesToSvg(area.width) - 8, inchesToSvg(area.height) - ENEMY_LABEL_HEIGHT - SIZE_CAPTION_HEIGHT);
     const enemies = (enemyCaptions[tag] ?? []).join(', ').replaceAll(' *', '');
     return rectangleParts('enemy-area', area, [{ text: tag, size: 13, bold: true }, ...captionLines],
-      { info: `${tag} · enemy area · ${enemies || 'enemies set up here'} · ${sizeCaption(area)} · ${distanceFromNearestEdges(area)}` });
+      { info: `${tag} · enemy area · ${enemies || 'enemies set up here'} · ${sizeCaption(area)} · ${edgeDistancesText(area)}` });
   });
   const zoneParts = [crewZoneParts, ...enemyAreaParts];
   return {
@@ -293,6 +297,22 @@ function roomLayoutSvg(roomLayout, { enemyCaptions = {}, crewCaption = '' } = {}
 }
 
 // terrain and roomLayout may each be missing: the sketch shows whatever is known
+// Dashed lines from each board edge to an item, with the distance on each: what to measure when setting it up.
+// Returned as SVG markup for the empty #board-measure group; `box` is [x, y, width, height] in inches.
+export function renderMeasurementLinesSvg([x, y, width, height]) {
+  const centreX = x + width / 2;
+  const centreY = y + height / 2;
+  const lines = [
+    [0, centreY, x, centreY], [x + width, centreY, BOARD_WIDTH_INCHES, centreY],
+    [centreX, 0, centreX, y], [centreX, y + height, centreX, BOARD_HEIGHT_INCHES],
+  ];
+  return lines.filter(([x1, y1, x2, y2]) => Math.hypot(x2 - x1, y2 - y1) > 0.01).map(([x1, y1, x2, y2]) => {
+    const [ux1, uy1, ux2, uy2] = [x1, y1, x2, y2].map(inchesToSvg);
+    return `<line x1="${ux1}" y1="${uy1}" x2="${ux2}" y2="${uy2}"/><circle cx="${ux1}" cy="${uy1}" r="1.6"/><circle cx="${ux2}" cy="${uy2}" r="1.6"/>
+      <text x="${(ux1 + ux2) / 2}" y="${(uy1 + uy2) / 2}" font-size="8">${roundedInches(Math.hypot(x2 - x1, y2 - y1))}″</text>`;
+  }).join('');
+}
+
 // captions.focus: one kind of thing ('crew', 'enemy', 'terrain', 'marker', 'random') to light up while the rest dims
 export function renderBoardSvg(terrain, roomLayout, captions = {}) {
   const width = BOARD_WIDTH_INCHES * SVG_UNITS_PER_INCH;
@@ -304,7 +324,7 @@ export function renderBoardSvg(terrain, roomLayout, captions = {}) {
     const x = piece.x * SVG_UNITS_PER_INCH;
     const y = piece.y * SVG_UNITS_PER_INCH;
     const isOverAZone = zones.some((zone) => overlap(piece, zone));
-    return `<g class="terrain-piece ${piece.size === LARGE_TERRAIN_INCHES ? 'large' : 'small'}${isOverAZone ? ' over-zone' : ''}" style="animation-delay: ${pieceIndex * 70}ms"${infoAttributes(`Random terrain ${pieceLetter(pieceIndex)} · rolled by the app · ${piece.size}″ × ${piece.size}″ · ${distanceFromNearestEdges(piece)}`)}>
+    return `<g class="terrain-piece ${piece.size === LARGE_TERRAIN_INCHES ? 'large' : 'small'}${isOverAZone ? ' over-zone' : ''}" style="animation-delay: ${pieceIndex * 70}ms"${infoAttributes(`Random terrain ${pieceLetter(pieceIndex)} · rolled by the app · ${piece.size}″ × ${piece.size}″ · ${edgeDistancesText(piece)}`, asRectangle(piece))}>
       <title>Random terrain ${pieceLetter(pieceIndex)}</title>
       <rect class="terrain-shadow" x="${x + 2.5}" y="${y + 2.5}" width="${side}" height="${side}" rx="2"/>
       <rect class="terrain-box" x="${x}" y="${y}" width="${side}" height="${side}" rx="2"/>
@@ -324,6 +344,7 @@ export function renderBoardSvg(terrain, roomLayout, captions = {}) {
     ${layoutSvg.zoneLabels}
     ${layoutSvg.onTop}
     <rect class="board-edge" width="${width}" height="${height}"/>
+    <g id="board-measure" class="measure"></g>
   </svg>`;
 }
 
@@ -333,13 +354,13 @@ export function roomLayoutLines(roomLayout) {
     group,
     tag: rectangle.label ?? `${tagPrefix}${index + 1}`,
     text: `${defaultName} · ${roundedInches(rectangle.width)}" × ${roundedInches(rectangle.height)}"`,
-    where: distanceFromNearestEdges(rectangle),
+    where: edgeDistancesText(rectangle).replace('from the edges: ', ''),
   }));
   const markerLines = (roomLayout.markers ?? []).map((marker) => ({
     group: 'Objectives and points',
     tag: marker.label,
     text: marker.diameter ? `${marker.diameter}" circle, centre` : 'point',
-    where: distanceFromNearestEdgesOfPoint(marker),
+    where: edgeDistancesText(pointAsBox(marker)).replace('from the edges: ', ''),
   }));
   const crewZone = roomLayout.crewZone ? [{ label: 'Start', ...roomLayout.crewZone }] : [];
   return [

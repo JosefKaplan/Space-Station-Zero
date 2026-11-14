@@ -9,7 +9,7 @@ import {
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as store from './state.js';
 import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, parseRoomLayouts, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
-import { generateTerrain, renderBoardSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
+import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
 const appElement = document.getElementById('app');
@@ -25,6 +25,8 @@ const ui = {
   boardInfo: null,
   // set by a terrain roll, used up by the next render: only freshly rolled pieces drop in
   isTerrainJustRolled: false,
+  // whether the lore at the top of the room card is open; starts open in every room, remembered while you stay
+  isLoreOpen: true,
   postGame: null,
   exitRoll: '',
   mapSelected: null,
@@ -223,14 +225,19 @@ function renderRulesSection(section) {
 }
 
 // the room's lore and rules in the book's words, folded away: open them when needed
-function renderRoomText(roomLayout) {
-  return `${roomLayout.lore ? `<details><summary>Lore</summary><p class="lore">${renderBookText(roomLayout.lore)}</p></details>` : ''}
-    ${roomLayout.rules?.length ? `<details><summary>Rules for this room</summary><div class="rules">${roomLayout.rules.map(renderRulesSection).join('')}</div></details>` : ''}`;
+function renderRoomRules(roomLayout) {
+  return roomLayout.rules?.length ? `<details><summary>Rules for this room</summary><div class="rules">${roomLayout.rules.map(renderRulesSection).join('')}</div></details>` : '';
+}
+
+// the read-aloud text is the first thing in a room's card, open when the room is entered; folding it sticks for that room
+function renderLore(roomLayout) {
+  return roomLayout?.lore
+    ? `<details class="lore-box" data-lore ${ui.isLoreOpen ? 'open' : ''}><summary>Lore</summary><p class="lore">${renderBookText(roomLayout.lore)}</p></details>` : '';
 }
 
 function renderRoomInfo(roomLayout) {
   if (!roomLayout) return '<p class="hint">No room layouts loaded. Run the app from the project folder, or import the file in Settings.</p>';
-  return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomText(roomLayout)}`;
+  return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomRules(roomLayout)}`;
 }
 
 const BOARD_INFO_HINT = 'Hover or tap an area, object or piece on the map for its details.';
@@ -255,7 +262,8 @@ function renderRoomTable(number, { isSettingUp }) {
     ${roomLayout ? `<details><summary>Measurements for the room</summary>${renderRoomLayoutLines(roomLayout)}</details>` : ''}
     ${terrain ? `<details><summary>Random terrain pieces</summary>${renderRandomTerrainList(terrain)}</details>` : ''}`;
   // setting up: what is in the room first, then the table; playing: the table first, the summary as a reference below
-  return isSettingUp ? `${spoilersHtml}${tableHtml}` : `${tableHtml}<h4 class="plain-heading">What is in this room</h4>${spoilersHtml}`;
+  const loreHtml = renderLore(roomLayout);
+  return isSettingUp ? `${loreHtml}${spoilersHtml}${tableHtml}` : `${loreHtml}${tableHtml}<h4 class="plain-heading">What is in this room</h4>${spoilersHtml}`;
 }
 
 // the step between walking in and playing: the order follows the book's own set-up (p. 43–44)
@@ -621,6 +629,7 @@ function resetBoardViewWhenRoomChanged() {
     roomOfBoardView = room;
     ui.boardInfo = null;
     ui.boardFocus = null;
+    ui.isLoreOpen = true;
   }
 }
 
@@ -719,6 +728,13 @@ const actions = {
 // animations keep running and the tapped item stays lit
 const MAP_ONLY_ACTIONS = new Set(['showBoardInfo', 'toggleBoardFocus']);
 
+// measuring lines from the board edges to an item (the tapped one, or the one under the pointer); none for no item
+function showMeasurementsOf(item) {
+  const group = document.getElementById('board-measure');
+  if (!group) return;
+  group.innerHTML = item?.dataset.box ? renderMeasurementLinesSvg(item.dataset.box.split(' ').map(Number)) : '';
+}
+
 function refreshBoardInteractions() {
   const board = document.querySelector('.terrain-board');
   if (!board) return;
@@ -726,6 +742,7 @@ function refreshBoardInteractions() {
   if (ui.boardFocus) board.classList.add(`focus-${ui.boardFocus}`);
   board.querySelectorAll('[data-info]').forEach((item) => item.classList.toggle('selected', item.dataset.info === ui.boardInfo));
   document.getElementById('board-info').textContent = ui.boardInfo ?? BOARD_INFO_HINT;
+  showMeasurementsOf(board.querySelector('.selected'));
   document.querySelectorAll('.legend-item').forEach((button) => {
     const isOn = button.dataset.kind === ui.boardFocus;
     button.classList.toggle('active', isOn);
@@ -849,15 +866,22 @@ try {
   ui.errorMessage = `Stored room layouts are unreadable, import them again: ${error.message}`;
 }
 appElement.addEventListener('click', handleClick);
+// a <details> reports opening and closing with a `toggle` event that does not bubble, hence the capture
+appElement.addEventListener('toggle', (event) => {
+  if (event.target.matches?.('details[data-lore]')) ui.isLoreOpen = event.target.open;
+}, true);
 // hovering previews an item's details in the info line without re-rendering; leaving it shows the tapped item again
 appElement.addEventListener('mouseover', (event) => {
   const hovered = event.target.closest?.('[data-info]');
-  if (hovered) document.getElementById('board-info').textContent = hovered.dataset.info;
+  if (!hovered) return;
+  document.getElementById('board-info').textContent = hovered.dataset.info;
+  showMeasurementsOf(hovered);
 });
 appElement.addEventListener('mouseout', (event) => {
   const panel = document.getElementById('board-info');
   if (!panel || !event.target.closest?.('[data-info]') || event.relatedTarget?.closest?.('[data-info]')) return;
   panel.textContent = ui.boardInfo ?? BOARD_INFO_HINT;   // the pointer left the item: show the tapped one again
+  showMeasurementsOf(document.querySelector('.terrain-board .selected'));
 });
 appElement.addEventListener('input', handleInput);
 appElement.addEventListener('change', handleImport);
