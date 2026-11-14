@@ -172,16 +172,51 @@ in-progress view; "Room set-up" there goes back, so the sketch stays reachable d
 
 General terrain (`js/terrain.js`, table and sizes in `js/data.js`):
 
-- One d12 per quadrant of the 22" × 30" board (drawn upright), read off the Random Terrain Table.
+- One d12 per quadrant of the 30" × 22" board (drawn landscape, as the book's maps are), read off the Random Terrain Table.
 - Pieces are placed at random whole-inch spots inside their quadrant, at least 2" from every other piece.
   Large pieces are placed first across the whole board; if a layout does not fit, positions are retried
-  (the dice stand) and after that it fails with an error.
+  (the dice stand), up to a cap; the best layout found is kept (see the room-layout notes below).
 - The sketch labels pieces A, B, …; the list under it gives each piece's gap to its two nearest board edges.
-- Tapping a piece moves it to another free spot in its quadrant. The app does not know the room's own
-  terrain, objectives or starting zone (they are only on the book's maps, which stay out of the repo), so
-  clashes with them are fixed by hand this way.
+- Random terrain is never moved by hand: it only changes by rolling again. Without an imported room layout the app does
+  not know the room's own terrain, objectives or starting zone, so it cannot keep the pieces off them.
 - The step is shown in every room; a room whose set-up says it has no terrain is the player's call to skip.
 - Not built: tickable steps, keeping a room's layout after leaving it, dragging pieces, scatter terrain.
+
+Room layouts (`js/room-layouts.js`, optional): the room's own footprint comes from the owner's private
+`local/room-layouts.json` (gitignored), imported in Settings and stored under its own `localStorage` key
+`ssz-room-layouts`, apart from the save (schema in the README). It is never part of an export and never in the repo.
+
+- `fetchLocalRoomLayouts` (room-layouts.js) tries `local/room-layouts.json` next to the app at every start and, if
+  served, validates it and replaces the stored copy; a 404 (GitHub Pages) is silently ignored, an invalid file is an error.
+- Per challenge number: `fixedTerrain` and `enemyAreas` rectangles, `markers` (objectives and drop points; a
+  `diameter` makes one a circle), one `crewZone` rectangle and an optional `note`, in inches on the upright board
+  from the top-left corner, in the orientation the book prints (30" × 22"), so the sketch can be compared with the page.
+  Layout file `schemaVersion` 2; save `schemaVersion` 5 drops terrain rolled on the old upright board. Validated on import (known challenge, inside the board); a bad file is
+  rejected and the old layouts stay; a stored file that stops validating shows an error instead of vanishing.
+- The sketch imitates the printed map: grey/black/hatched room terrain (`look`), teal crew zone, pink enemy areas
+  with the number of models in each (`perCrew` split over `areas`, one crew), black objective circles; the random
+  pieces are solid yellow-outlined boxes with letters and a shadow, so they cannot be mistaken for the room's own terrain (dashed, translucent or hatched). Zone labels are drawn above random pieces. The set-up step lists each with its distance to the nearest
+  board edges, so it can be built with a tape measure.
+- Random terrain keeps the 2" gap from fixed terrain and from circular markers (the square around them), both when
+  rolled. The crew zone and enemy areas are kept free while there is room for every piece (then overlapped as a last
+  resort); drop points are not avoided.
+- A piece goes in its own quadrant; if the room's terrain leaves no spot there, anywhere else on the board; if there
+  is none at all, it is kept in `terrain.unplacedPieces` and shown as "no room" (the rooms whose own terrain leaves
+  too little space). Saves without the field mean none unplaced, so no migration.
+- Importing layouts clears terrain already rolled for the room being set up, since it ignored the room's terrain.
+- The same entry can carry a short briefing: `enemies` (name, count, where, optional when/hidden), `enemyNote`,
+  `crewNote`, `hazards`, `deadline`, `goal`. What is in a room (briefing, layout, text) is shown only for the room the crew has reached, and a spoiler warning
+  comes before entering it (exits, set-out bar), not inside the room. The room card is one flow: a summary (where the crew and each enemy group set up, goal, deadline, hazards), the board with the roll button,
+  measurements and the random pieces in folded lists, and a sticky "Begin challenge" / "Challenge over" button.
+- The map is interactive and animated (CSS only, off with `prefers-reduced-motion`): hovering or tapping any area,
+  object or piece shows its details in an info line under the map (`ui.boardInfo`); the legend entries are buttons
+  that light one kind up and dim the rest (`ui.boardFocus`); the crew zone's dashes march, enemy areas pulse,
+  circular objectives ping, rolled pieces drop in (only on the render right after a roll). Taps on the map and the
+  legend update it in place (`refreshBoardInteractions`) instead of re-rendering, so animations are not restarted
+  and the tapped item stays lit (`.selected`). Neither state is saved.
+- Random terrain never covers the middle 80% × 60% of a zone (where its label sits); only the zone's edge can be
+  overlapped, and such pieces are drawn translucent.
+- Not built: per-room versions of the layout.
 
 ## 8. Implementation steps
 

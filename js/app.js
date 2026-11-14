@@ -1,22 +1,30 @@
 // Rendering and event handling. Every button re-renders the whole app; typing never does
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
-  ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, BOARD_HEIGHT_INCHES, BOARD_WIDTH_INCHES, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
+  ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as store from './state.js';
-import { generateTerrain, moveTerrainPiece, renderTerrainSvg, terrainPlacementsByQuadrant } from './terrain.js';
+import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, parseRoomLayouts, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
+import { generateTerrain, renderBoardSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
 const appElement = document.getElementById('app');
 
 let state = null;
+let roomLayouts = null;
 let unreadableSaveMessage = null;
 const ui = {
   tab: 'journey',
+  // which kind of thing is lit up on the room's map (see renderBoardLegend); never saved
+  boardFocus: null,
+  // what the info line under the map shows after a tap (hover only previews it); never saved
+  boardInfo: null,
+  // set by a terrain roll, used up by the next render: only freshly rolled pieces drop in
+  isTerrainJustRolled: false,
   postGame: null,
   exitRoll: '',
   mapSelected: null,
@@ -124,43 +132,169 @@ function renderJourney() {
       <p class="eyebrow">Challenge ${number} <span class="chip ${isCleared ? 'ok' : 'warn'}">${isCleared ? 'cleared' : 'in progress'}</span></p>
       <h2>${escapeHtml(challenge.name)}</h2>
       <p class="page-ref">Rulebook p. ${challenge.page}</p>
+      ${isCleared ? '' : renderRoomTable(number, { isSettingUp: false })}
       ${renderReminders(reminders)}
-      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="row wrap"><button class="primary" data-action="openPostGame">Challenge over →</button>
-        <button data-action="reopenRoomSetup">← Room set-up</button></div>`)}
+      ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="sticky-action"><button class="primary" data-action="openPostGame">Challenge over →</button>
+        <button data-action="reopenRoomSetup">← Set-up</button></div>`)}
     </section>
     ${!isCleared && ui.postGame ? renderPostGame(challenge, progress) : ''}
     ${renderStationMap()}`;
 }
 
+function activeCrewModelCount() {
+  return state.run.crew.members.filter((member) => member.status === 'active').length;
+}
+
+// the app tracks one crew, so "per crew" is the number itself; areas share it evenly, the first ones taking the odd models
+function enemyShares(enemy) {
+  const total = enemy.perCrew;
+  return (enemy.areas ?? []).map((area, index) => ({
+    area, count: Math.floor(total / enemy.areas.length) + (index < total % enemy.areas.length ? 1 : 0) }));
+}
+
+function enemyCaptionsByArea(roomLayout) {
+  const captions = {};
+  for (const enemy of roomLayout.enemies ?? []) {
+    for (const { area, count } of enemy.areas ? enemyShares(enemy) : []) {
+      if (count > 0) (captions[area] ??= []).push(`${count}× ${enemy.name}${enemy.hidden ? ' (hidden)' : ''}${enemy.when ? ' *' : ''}`);
+    }
+  }
+  return captions;
+}
+
+function renderEnemyLine(enemy) {
+  const where = enemy.areas ? enemyShares(enemy).map(({ area, count }) => `${area}: ${count}`).join(' · ') : enemy.where;
+  const total = enemy.perCrew ? `${enemy.perCrew}× ` : '';
+  return `<li><b>${total}${escapeHtml(enemy.name)}</b> — ${escapeHtml(where)}${enemy.hidden ? ' <span class="chip warn">hidden</span>' : ''}
+    ${enemy.when ? `<br><i>${escapeHtml(enemy.when)}</i>` : ''}${enemy.hidden && enemy.areas ? '<br><i>placed once revealed</i>' : ''}</li>`;
+}
+
+// the room in a few lines: who sets up where, what to beat, what can kill the crew
+function renderRoomSummary(roomLayout) {
+  const crewLine = roomLayoutLines(roomLayout).find((line) => line.group.startsWith('Your crew'));
+  const crewHtml = crewLine
+    ? `<b>${activeCrewModelCount()} models</b> set up anywhere inside the start zone, ${escapeHtml(crewLine.text.replace('Zone · ', ''))} (${crewLine.where}).`
+    : escapeHtml(roomLayout.crewNote ?? 'No starting zone is drawn on this map.');
+  const hasEnemies = (roomLayout.enemies ?? []).length > 0;
+  const hasSetUpInfo = Boolean(crewLine || roomLayout.crewNote || hasEnemies || roomLayout.enemyNote);
+  return `<div class="glance">
+    ${roomLayout.note ? `<p class="hint">${escapeHtml(roomLayout.note)}</p>` : ''}
+    ${hasSetUpInfo ? `<div class="glance-row crew"><span class="swatch crew"></span><div><h4>Your crew</h4><p>${crewHtml}</p>
+      ${crewLine && roomLayout.crewNote ? `<p>${escapeHtml(roomLayout.crewNote)}</p>` : ''}</div></div>
+    <div class="glance-row enemy"><span class="swatch enemy"></span><div><h4>Enemies</h4>
+      ${roomLayout.enemyNote ? `<p>${escapeHtml(roomLayout.enemyNote)}</p>` : ''}
+      ${hasEnemies ? `<ul class="plain">${roomLayout.enemies.map(renderEnemyLine).join('')}</ul>` : (roomLayout.enemyNote ? '' : '<p>None.</p>')}</div></div>` : ''}
+    ${roomLayout.deadline ? `<p class="deadline">⏱ ${escapeHtml(roomLayout.deadline)}</p>` : ''}
+    ${roomLayout.goal ? `<p class="goal"><b>Goal:</b> ${escapeHtml(roomLayout.goal)}</p>` : ''}
+    ${(roomLayout.hazards ?? []).length ? `<h4 class="plain-heading">Hazards and objectives</h4><ul class="plain">${roomLayout.hazards.map((hazard) => `<li>${escapeHtml(hazard)}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+// the book's text is shown as stored: **bold** runs are the book's run-in headings, nothing else is markup
+function renderBookText(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
+// one enemy stat bar per row, as printed (Lf Mv Co Re In, and armor when the room gives it)
+function renderEnemyStats(stats) {
+  if (!stats?.length) return '';
+  return `<h4 class="plain-heading">Enemy stats</h4><div class="stats-wrap"><table class="enemy-stats">
+    <thead><tr><th></th><th>Lf</th><th>Mv</th><th>Co</th><th>Re</th><th>In</th><th>Armor</th></tr></thead>
+    <tbody>${stats.map((stat) => `<tr><th scope="row">${escapeHtml(stat.name)}</th><td>${stat.lf}</td><td>${stat.mv}</td><td>${stat.co}</td><td>${stat.re}</td><td>${stat.in}</td>
+      <td>${stat.armor ? escapeHtml(stat.armor) : '–'}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderRulesSection(section) {
+  const blocksHtml = [];
+  for (const block of section.blocks) {
+    if (block.t === 'table') {
+      blocksHtml.push(`<div class="stats-wrap"><table class="rules-table"><tbody>${block.rows.map((row, rowIndex) => (
+        `<tr>${row.map((cell) => (rowIndex === 0 ? `<th>${escapeHtml(cell)}</th>` : `<td>${escapeHtml(cell)}</td>`)).join('')}</tr>`)).join('')}</tbody></table></div>`);
+    } else if (block.t === 'li') {
+      const previousHtml = blocksHtml[blocksHtml.length - 1];
+      const item = `<li>${renderBookText(block.x)}</li>`;
+      if (previousHtml?.startsWith('<ul class="plain rules-list">')) blocksHtml[blocksHtml.length - 1] = `${previousHtml.slice(0, -'</ul>'.length)}${item}</ul>`;
+      else blocksHtml.push(`<ul class="plain rules-list">${item}</ul>`);
+    } else {
+      blocksHtml.push(`<p>${renderBookText(block.x)}</p>`);
+    }
+  }
+  return `<h5>${renderBookText(section.title)}</h5>${blocksHtml.join('')}`;
+}
+
+// the room's lore and rules in the book's words, folded away: open them when needed
+function renderRoomText(roomLayout) {
+  return `${roomLayout.lore ? `<details><summary>Lore</summary><p class="lore">${renderBookText(roomLayout.lore)}</p></details>` : ''}
+    ${roomLayout.rules?.length ? `<details><summary>Rules for this room</summary><div class="rules">${roomLayout.rules.map(renderRulesSection).join('')}</div></details>` : ''}`;
+}
+
+function renderRoomInfo(roomLayout) {
+  if (!roomLayout) return '<p class="hint">No room layouts loaded. Run the app from the project folder, or import the file in Settings.</p>';
+  return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomText(roomLayout)}`;
+}
+
+const BOARD_INFO_HINT = 'Hover or tap an area, object or piece on the map for its details.';
+
+// the table: one board with the room's own layout (grey/black/teal/pink, as in the book) and the app's random terrain (amber)
+function renderRoomTable(number, { isSettingUp }) {
+  const roomLayout = roomLayoutFor(roomLayouts, number);
+  const terrain = state.run.roomSetup.terrain;
+  const spoilersHtml = renderRoomInfo(roomLayout);
+  const isFirstDrawOfNewTerrain = ui.isTerrainJustRolled;
+  ui.isTerrainJustRolled = false;
+  const boardHtml = roomLayout || terrain
+    ? `${renderBoardSvg(terrain, roomLayout, { enemyCaptions: roomLayout ? enemyCaptionsByArea(roomLayout) : {}, crewCaption: `${activeCrewModelCount()} models`, focus: ui.boardFocus, dropIn: isFirstDrawOfNewTerrain })}
+       <p class="board-info" id="board-info">${escapeHtml(ui.boardInfo ?? BOARD_INFO_HINT)}</p>
+       ${renderBoardLegend(Boolean(terrain), Boolean(roomLayout))}` : '';
+  const rollHtml = isSettingUp
+    ? (terrain ? confirmButton('rollTerrain', 'Roll random terrain again') : '<button data-action="rollTerrain">Roll random terrain</button>') : '';
+  const unplacedHtml = terrain?.unplacedPieces?.length
+    ? `<p class="hint terrain-unplaced">${terrain.unplacedPieces.length} random piece(s) marked "no room" do not fit 2" away from the room's terrain and objectives: put them where they fit.</p>` : '';
+  const tableHtml = `<h4 class="plain-heading">${isSettingUp ? 'Set up the table' : 'The table'}</h4>
+    ${boardHtml}${rollHtml}${unplacedHtml}
+    ${roomLayout ? `<details><summary>Measurements for the room</summary>${renderRoomLayoutLines(roomLayout)}</details>` : ''}
+    ${terrain ? `<details><summary>Random terrain pieces</summary>${renderRandomTerrainList(terrain)}</details>` : ''}`;
+  // setting up: what is in the room first, then the table; playing: the table first, the summary as a reference below
+  return isSettingUp ? `${spoilersHtml}${tableHtml}` : `${tableHtml}<h4 class="plain-heading">What is in this room</h4>${spoilersHtml}`;
+}
+
 // the step between walking in and playing: the order follows the book's own set-up (p. 43–44)
 function renderRoomSetup(number, challenge, reminders) {
-  const crewGoingIn = state.run.crew.members.filter((member) => member.status === 'active').length;
   return `<section class="card room">
       <p class="eyebrow">Challenge ${number} <span class="chip warn">setting up</span></p>
       <h2>${escapeHtml(challenge.name)}</h2>
-      <ol class="setup-steps">
-        <li><b>Briefing.</b> Read the room's opening on p. ${challenge.page}.</li>
-        <li><b>The room.</b> Lay out its map from the same pages: the room's own terrain, objectives and enemies.</li>
-        <li><b>General terrain.</b> Cover that is not on the map (p. 43–44). Skip this if the room's set-up says there is no terrain.
-          ${renderTerrain(state.run.roomSetup.terrain)}</li>
-        <li><b>Crew.</b> ${crewGoingIn} go in. Place them in the starting zone last (p. 44).</li>
-      </ol>
+      <p class="page-ref">Read the room's opening on p. ${challenge.page}, then set up the table.</p>
+      ${renderRoomTable(number, { isSettingUp: true })}
       ${renderReminders(reminders)}
-      <button class="primary" data-action="beginChallenge">Begin challenge →</button>
+      <div class="sticky-action"><button class="primary" data-action="beginChallenge">Begin challenge →</button></div>
     </section>`;
 }
 
-function renderTerrain(terrain) {
-  if (!terrain) return '<button data-action="rollTerrain">Roll terrain</button>';
-  const quadrantsHtml = terrainPlacementsByQuadrant(terrain).map(({ name, roll, pieces }) => (
+function renderRoomLayoutLines(roomLayout) {
+  const lines = roomLayoutLines(roomLayout);
+  const groupNames = [...new Set(lines.map((line) => line.group))];
+  return `${groupNames.map((group) => `<h4>${escapeHtml(group)}</h4><ul class="plain terrain-list">${lines.filter((line) => line.group === group).map(({ tag, text, where }) => (
+    `<li><b>${escapeHtml(tag)}</b> ${escapeHtml(text)} <span class="terrain-where">${where}</span></li>`)).join('')}</ul>`).join('')}
+    <p class="hint">Distances are from the board edges, as the sketch is drawn (top-left corner = 0", 0"). Rough to about ¼".</p>`;
+}
+
+// what each colour on the sketch is. Each entry is a button: tap it to light that kind up on the map, tap again to stop.
+function renderBoardLegend(hasRandomTerrain, hasRoomLayout) {
+  const entries = [
+    ...(hasRandomTerrain ? [['random', 'random terrain']] : []),
+    ...(hasRoomLayout ? [['crew', 'your crew'], ['enemy', 'enemies'], ['terrain', "room's terrain"], ['marker', 'objectives']] : []),
+  ];
+  return entries.length ? `<div class="legend">${entries.map(([kind, label]) => (
+    `<button class="legend-item ${ui.boardFocus === kind ? 'active' : ''}" data-action="toggleBoardFocus" data-kind="${kind}" aria-pressed="${ui.boardFocus === kind}">
+      <span class="swatch ${kind}"></span>${label}</button>`)).join('')}</div>` : '';
+}
+
+function renderRandomTerrainList(terrain) {
+  return `<ul class="plain terrain-list">${terrainPlacementsByQuadrant(terrain).map(({ name, roll, pieces, unplacedFootprints }) => (
     `<li><span class="terrain-quadrant">${name} · rolled ${roll}</span>
-      <ul class="plain">${pieces.map(({ letter, footprint, where }) => `<li><b>${letter}</b> ${footprint} <span class="terrain-where">${where}</span></li>`).join('')}</ul></li>`
-  )).join('');
-  return `${renderTerrainSvg(terrain)}
-    <p class="hint">The board is ${BOARD_WIDTH_INCHES}" × ${BOARD_HEIGHT_INCHES}", seen from above. Each piece lists its gap to the two nearest board edges.
-      Tap a piece to move it if it sits on something from the room's map.</p>
-    <ul class="plain terrain-list">${quadrantsHtml}</ul>
-    ${confirmButton('rollTerrain', 'Roll again')}`;
+      <ul class="plain">${pieces.map(({ letter, footprint, where }) => `<li><b>${letter}</b> ${footprint} <span class="terrain-where">${where}</span></li>`).join('')}
+        ${unplacedFootprints.map((footprint) => `<li class="terrain-unplaced"><b>?</b> ${footprint} <span class="terrain-where">no room</span></li>`).join('')}</ul></li>`
+  )).join('')}</ul>`;
 }
 
 function renderReminders(reminders) {
@@ -171,6 +305,9 @@ function exitRollPreviewText(challenge, enteredRoll) {
   const destination = exitForRoll(challenge, Number(enteredRoll));
   return destination ? `${enteredRoll} → Challenge ${challengeTitle(destination)}` : '';
 }
+
+// said before a room is entered: the room's card shows everything about it at once
+const SPOILER_WARNING_HTML = '<p class="spoiler-warning">⚠ Spoilers: the next room shows everything about it as soon as you enter: enemies, hazards, deadlines, the map.</p>';
 
 function renderExits(challenge) {
   const run = state.run;
@@ -191,7 +328,7 @@ function renderExits(challenge) {
     )).join('')}</div>`;
   }
   const backtrackTargets = store.reachableClearedChallenges(run);
-  return `<h3>Exits</h3>${exitsHtml}
+  return `<h3>Exits</h3>${SPOILER_WARNING_HTML}${exitsHtml}
     ${backtrackTargets.length ? `<h3>Backtrack (no replay, p. 43)</h3><div class="row wrap">${backtrackTargets.map((number) => (
       `<button data-action="takeExit" data-to="${number}" data-label="Backtracked">${challengeTitle(number)}</button>`)).join('')}</div>` : ''}`;
 }
@@ -276,18 +413,28 @@ function renderMapRoomDetail(number, isGhost) {
 
 // ---------- crew ----------
 
+// a crew that has not entered its first room yet: the way on is one tap, at the top and the bottom of a long roster
+function renderSetOutBar() {
+  const run = state.run;
+  const hasNotSetOut = run.cleared.length === 0 && run.route.length === 1 && !run.roomSetup.isMissionStarted;
+  return hasNotSetOut ? `<div class="setout-bar"><span>Crew registered. Add gear below, then set out.</span>
+    ${SPOILER_WARNING_HTML}
+    <button class="primary" data-action="showTab" data-tab="journey">Set out to Challenge ${run.currentChallenge} →</button></div>` : '';
+}
+
 function renderCrew() {
   if (!state.run) return renderNewCrewForm();
   const { crew } = state.run;
   const progress = store.agendaProgress(state);
-  return `<section class="card">
+  return `${renderSetOutBar()}<section class="card">
       <input class="title-input" data-bind="run.crew.name" value="${escapeHtml(crew.name)}" aria-label="Crew name">
       <p class="hint">${crew.size}-person crew · ${escapeHtml(crew.shipType)} ship · ${escapeHtml(crew.edge)}
       ${progress ? ` · ${AGENDAS[progress.agendaKey].name} agenda ${progress.found}/${progress.partsNeeded}` : ''}</p>
       <p class="hint">Starting gear (p. 36): one weapon each, plus ${STARTING_OTHER_EQUIPMENT + SHIP_TYPES[crew.shipType].extraStartingEquipment} other pieces for the whole crew. Commander's bonus piece: p. 32.</p>
     </section>
     ${crew.members.map(renderMember).join('')}
-    <button data-action="addMember">+ Add member</button>`;
+    <button data-action="addMember">+ Add member</button>
+    ${renderSetOutBar()}`;
 }
 
 function stepper(label, path, value, action = 'step') {
@@ -439,11 +586,22 @@ function renderDice() {
 
 // ---------- settings ----------
 
+function obstaclesForRandomTerrainInCurrentRoom() {
+  const roomLayout = roomLayoutFor(roomLayouts, state.run.currentChallenge);
+  return roomLayout ? obstaclesForRandomTerrain(roomLayout) : [];
+}
+
 function renderSettings() {
   return `<section class="card form"><h2>Save data</h2>
       <p class="hint">Everything lives in this browser only. Export to back up or move to another device.</p>
       <button data-action="exportSave">Export save (JSON)</button>
       <label class="file">Import save<input type="file" accept="application/json,.json" data-import></label>
+    </section>
+    <section class="card form"><h2>Room layouts</h2>
+      <p class="hint">${roomLayouts ? `Loaded for ${Object.keys(roomLayouts.rooms).length} rooms.` : 'None loaded.'}
+        Your private file with each room's terrain, enemies, objectives and crew zone. On your computer the app loads
+        <code>local/room-layouts.json</code> by itself; elsewhere (your phone, GitHub Pages) import it here. It stays in this browser only.</p>
+      <label class="file">Import room layouts<input type="file" accept="application/json,.json" data-import-layouts></label>
     </section>
     <section class="card form"><h2>Crew</h2>
       ${state.run ? `<p class="hint">Retiring archives this crew and lets a new one set out. Agenda progress and station legacy are kept.</p>${confirmButton('retireCrew', 'Retire crew')}` : '<p class="hint">No crew aboard.</p>'}
@@ -454,6 +612,18 @@ function renderSettings() {
 
 // ---------- shell ----------
 
+// the info line and the lit-up kind belong to one room's map: a new room starts clean (they could name things from the last room)
+let roomOfBoardView = null;
+
+function resetBoardViewWhenRoomChanged() {
+  const room = state?.run?.currentChallenge ?? null;
+  if (room !== roomOfBoardView) {
+    roomOfBoardView = room;
+    ui.boardInfo = null;
+    ui.boardFocus = null;
+  }
+}
+
 function render() {
   if (unreadableSaveMessage) {
     appElement.innerHTML = `<main><section class="card"><h2>Save data could not be read</h2>
@@ -463,6 +633,7 @@ function render() {
     </section></main>`;
     return;
   }
+  resetBoardViewWhenRoomChanged();
   const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, settings: renderSettings };
   appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div></header>
     <main>
@@ -471,6 +642,7 @@ function render() {
       ${views[ui.tab]()}
     </main>
     <nav>${TABS.map(([tab, label]) => `<button data-action="showTab" data-tab="${tab}" class="${ui.tab === tab ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
+  refreshBoardInteractions();
 }
 
 const actions = {
@@ -508,8 +680,13 @@ const actions = {
   rollInjury: ({ id }) => { ui.postGame.downed[id].roll = rollD12() + rollD12(); },
   applyPostGame: () => { store.completeCurrentChallenge(state, ui.postGame); ui.postGame = null; ui.exitRoll = ''; },
 
-  rollTerrain: () => { state.run.roomSetup.terrain = generateTerrain(rollD12); },
-  moveTerrainPiece: ({ index }) => { moveTerrainPiece(state.run.roomSetup.terrain, Number(index)); },
+  rollTerrain: () => {
+    state.run.roomSetup.terrain = generateTerrain(rollD12, obstaclesForRandomTerrainInCurrentRoom());
+    ui.isTerrainJustRolled = true;
+    ui.boardInfo = null;   // it may have described a piece that is gone now
+  },
+  showBoardInfo: ({ info }) => { ui.boardInfo = ui.boardInfo === info ? null : info; },
+  toggleBoardFocus: ({ kind }) => { ui.boardFocus = ui.boardFocus === kind ? null : kind; },
   beginChallenge: () => { state.run.roomSetup.isMissionStarted = true; },
   reopenRoomSetup: () => { state.run.roomSetup.isMissionStarted = false; },
 
@@ -538,9 +715,32 @@ const actions = {
   wipeEverything: () => { state = store.createEmptyState(); unreadableSaveMessage = null; ui.postGame = null; ui.tab = 'journey'; },
 };
 
+// taps on the map and its legend only change how the map looks: update it in place, so nothing re-renders, the
+// animations keep running and the tapped item stays lit
+const MAP_ONLY_ACTIONS = new Set(['showBoardInfo', 'toggleBoardFocus']);
+
+function refreshBoardInteractions() {
+  const board = document.querySelector('.terrain-board');
+  if (!board) return;
+  [...board.classList].filter((name) => name.startsWith('focus-')).forEach((name) => board.classList.remove(name));
+  if (ui.boardFocus) board.classList.add(`focus-${ui.boardFocus}`);
+  board.querySelectorAll('[data-info]').forEach((item) => item.classList.toggle('selected', item.dataset.info === ui.boardInfo));
+  document.getElementById('board-info').textContent = ui.boardInfo ?? BOARD_INFO_HINT;
+  document.querySelectorAll('.legend-item').forEach((button) => {
+    const isOn = button.dataset.kind === ui.boardFocus;
+    button.classList.toggle('active', isOn);
+    button.setAttribute('aria-pressed', String(isOn));
+  });
+}
+
 function handleClick(event) {
   const element = event.target.closest('[data-action]');
   if (!element) return;
+  if (MAP_ONLY_ACTIONS.has(element.dataset.action)) {
+    actions[element.dataset.action](element.dataset);
+    refreshBoardInteractions();
+    return;
+  }
   const confirmKey = element.dataset.confirm;
   ui.errorMessage = null;
   ui.noticeMessage = null;
@@ -598,7 +798,30 @@ function handleInput(event) {
   }
 }
 
+async function handleImportRoomLayouts(file) {
+  try {
+    const importedLayouts = parseRoomLayouts(await file.text());
+    saveRoomLayouts(importedLayouts);
+    roomLayouts = importedLayouts;
+    ui.noticeMessage = `Room layouts imported for ${Object.keys(importedLayouts.rooms).length} rooms.`;
+    // terrain rolled before the import ignored the room's own terrain: roll it again
+    if (state?.run && !state.run.roomSetup.isMissionStarted && state.run.roomSetup.terrain) {
+      state.run.roomSetup.terrain = null;
+      store.saveState(state);
+      ui.noticeMessage += ' The terrain rolled for this room was cleared: roll it again.';
+    }
+    ui.errorMessage = null;
+  } catch (error) {
+    ui.errorMessage = `Room layouts import failed, nothing was changed: ${error.message}`;
+  }
+  render();
+}
+
 async function handleImport(event) {
+  if ('importLayouts' in event.target.dataset) {
+    if (event.target.files[0]) await handleImportRoomLayouts(event.target.files[0]);
+    return;
+  }
   if (!('import' in event.target.dataset)) return;
   const file = event.target.files[0];
   if (!file) return;
@@ -620,7 +843,40 @@ try {
 } catch (error) {
   unreadableSaveMessage = error.message;
 }
+try {
+  roomLayouts = loadRoomLayouts();
+} catch (error) {
+  ui.errorMessage = `Stored room layouts are unreadable, import them again: ${error.message}`;
+}
 appElement.addEventListener('click', handleClick);
+// hovering previews an item's details in the info line without re-rendering; leaving it shows the tapped item again
+appElement.addEventListener('mouseover', (event) => {
+  const hovered = event.target.closest?.('[data-info]');
+  if (hovered) document.getElementById('board-info').textContent = hovered.dataset.info;
+});
+appElement.addEventListener('mouseout', (event) => {
+  const panel = document.getElementById('board-info');
+  if (!panel || !event.target.closest?.('[data-info]') || event.relatedTarget?.closest?.('[data-info]')) return;
+  panel.textContent = ui.boardInfo ?? BOARD_INFO_HINT;   // the pointer left the item: show the tapped one again
+});
 appElement.addEventListener('input', handleInput);
 appElement.addEventListener('change', handleImport);
+
+// served from the project folder: pick up local/room-layouts.json by itself, no Settings import needed
+// A re-render drops focus and swallows keystrokes, so it is skipped while a field is being edited (the layouts are
+// then used from the next render) and when the file is what is already loaded.
+const isTypingInAField = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+
+fetchLocalRoomLayouts().then((localLayouts) => {
+  if (!localLayouts) return;
+  const isNewContent = JSON.stringify(localLayouts) !== JSON.stringify(roomLayouts);
+  saveRoomLayouts(localLayouts);
+  roomLayouts = localLayouts;
+  if (!isNewContent && !ui.errorMessage) return;
+  ui.errorMessage = null;
+  if (!isTypingInAField()) render();
+}).catch((error) => {
+  ui.errorMessage = `local/room-layouts.json is not valid, nothing was loaded: ${error.message}`;
+  if (!isTypingInAField()) render();
+});
 render();

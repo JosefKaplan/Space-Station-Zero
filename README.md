@@ -12,17 +12,57 @@ It replaces the paper roster and the "wait, which room were we in?" notes:
 - **After the challenge** — a short guided checklist: injuries, experience, agenda roll, pick the next door.
 - **Captain's log** — an automatic timeline of the run plus your own notes, exportable as text.
 - **Dice** — a d12 pool roller that counts successes for you.
+- **Room set-up** — rolls the book's random terrain and sketches it on the board with distances from the edges, around
+  the room's own footprint (fixed terrain, enemy spots, crew zone) if you import your private room layouts.
 
 It is spoiler-safe: rooms are revealed only when you reach them, and secrets stay in the book —
 the app just tells you which page to open.
 
 > You need the rulebook to play. This app contains no rules text, maps, or story — only numbers,
-> names, and page references. Unofficial fan project, not affiliated with Snarling Badger Studios.
+> names, and page references. Room layouts are the one thing that comes from the book's maps: they are never in
+> this repo, only in a private file you import yourself (see below). Unofficial fan project, not affiliated
+> with Snarling Badger Studios.
 
 ## Use it
 
 Open the GitHub Pages URL of this repo. Everything is stored in your browser (`localStorage`);
 use **Export** to back up or move a campaign to another device, **Import** to load it.
+
+## Room layouts (optional, private)
+
+Run from the project folder (`python3 -m http.server 8000`), the app loads `local/room-layouts.json` **by itself** at every
+start, no import needed. Anywhere else (GitHub Pages, a phone opening the Pages address) use Settings → **Import room
+layouts**, which loads a JSON file with each room's fixed terrain, enemy areas, objective markers
+and crew starting zone, so the sketch matches the book's map. It is stored in your browser only and the repo never contains it
+(`local/` is gitignored — keep the file there). Without it the app works as before.
+
+```json
+{ "schemaVersion": 2,
+  "rooms": { "<challenge number>": {
+    "note": "optional text shown in the room's set-up",
+    "crewNote": "optional, when there is no starting zone",
+    "enemyNote": "optional text", "goal": "optional text", "deadline": "optional text",
+    "hazards": ["short names"],
+    "lore": "optional, the book's read-aloud text", "rules": [{ "title": "Set-Up", "blocks": [{ "t": "p | li | table", "x": "text", "rows": [["table cells"]] }] }],
+    "stats": [{ "name": "Enemy", "lf": 3, "mv": 4, "co": 2, "re": 2, "in": 1, "armor": "optional" }],
+    "enemies": [{ "name": "Enemy", "count": "2 per crew", "where": "E1 and E2, split evenly", "perCrew": 2, "areas": ["E1", "E2"], "when": "optional", "hidden": false }],
+    "crewZone": { "x": 0, "y": 0, "width": 22, "height": 6 },
+    "enemyAreas": [{ "x": 0, "y": 0, "width": 7, "height": 6, "label": "E1" }],
+    "fixedTerrain": [{ "x": 0, "y": 0, "width": 4, "height": 3, "label": "optional", "look": "black | gray | hatched" }],
+    "markers": [{ "x": 0, "y": 0, "label": "FR", "diameter": 3 }] } } }
+```
+
+A spoiler warning is shown before you enter a room (on the exits and the set-out bar); once you are in, the room card
+shows everything: your crew's start zone, the enemies and where each group sets up, the enemy stat table, goal,
+deadline and hazards, the board, and the lore and the book's rules for the room in folded sections.
+
+Inches, on the board as the book prints it (30" across, 22" deep), origin at the top-left corner. A marker with a `diameter` is a circle centred on
+the point; without one it is a plain point (a drop spot). Random terrain keeps its 2" gap from fixed terrain and from
+circular markers; if a piece fits nowhere, the set-up says "no room" for it.
+Bad files are rejected with the path of the problem, and the previous layouts stay.
+
+`.env` (gitignored; format in `.env.example`) holds the private link and local path of the rulebook PDF
+for whoever builds that file.
 
 ## Run locally
 

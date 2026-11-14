@@ -7,7 +7,7 @@ import {
 import { isValidTerrain } from './terrain.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const MEMBER_STATUSES = ['active', 'recovering', 'dead'];
 
 export function createEmptyState() {
@@ -56,6 +56,12 @@ function migrateFromVersion2(saved) {
 function migrateFromVersion3(saved) {
   if (saved.run) saved.run.roomSetup = { isMissionStarted: true, terrain: null };
   saved.schemaVersion = 4;
+}
+
+// v4 drew the board upright (22" × 30"); terrain rolled there does not fit the landscape board, so roll it again
+function migrateFromVersion4(saved) {
+  if (saved.run?.roomSetup) saved.run.roomSetup.terrain = null;
+  saved.schemaVersion = 5;
 }
 
 function requireValid(condition, what) {
@@ -107,12 +113,13 @@ function assertValidState(saved) {
 
 export function parseSavedState(text) {
   const saved = JSON.parse(text);
-  if (!isPlainObject(saved) || ![1, 2, 3, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+  if (!isPlainObject(saved) || ![1, 2, 3, 4, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
   if (saved.schemaVersion === 2) migrateFromVersion2(saved);
   if (saved.schemaVersion === 3) migrateFromVersion3(saved);
+  if (saved.schemaVersion === 4) migrateFromVersion4(saved);
   assertValidState(saved);
   return saved;
 }

@@ -7,6 +7,9 @@ XP, agenda progress, and a narrative log. It is a tracker, not a rules engine.
 Read `docs/ANALYSIS.md` for the concept and implementation plan.
 `docs/campaign-data.md` holds the campaign graph — it is full of spoilers (see below).
 
+Rulebook source: the owner's paid, watermarked PDF, kept outside the repo. Its private link and local path
+are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.env.example` shows the format.
+
 ## Stack
 
 - Plain HTML + CSS + vanilla JS (ES modules). No framework, no build step, no dependencies, no backend.
@@ -18,13 +21,19 @@ Read `docs/ANALYSIS.md` for the concept and implementation plan.
 
 1. **No rulebook content in the repo.** The repo is public and the rulebook is a paid, copyrighted,
    watermarked PDF. Never commit the PDF, extracted text, flavour text, hidden-information text,
-   maps, or full rule/ability wording. Allowed: challenge numbers and names, exit graph, page
+   maps, or full rule/ability wording. Room footprints (fixed terrain, enemy spots, crew zone) are map content:
+   they live only in the owner's gitignored `local/room-layouts.json`, imported into the browser's localStorage
+   (`js/room-layouts.js`). The same file holds each room's short briefing (enemy names and counts, hazards,
+   deadline, goal) and the book's own room text (lore, rules, enemy stat bars), extracted by
+   `local/extract-room-texts.py`. Never write any of it into tracked files, commits, chat, or examples built from real data. Allowed: challenge numbers and names, exit graph, page
    references ("read p. 45"), table thresholds, stat numbers, names of ship types / crew types /
    edges / equipment. When the player needs wording, point at the page.
 2. **Spoiler safety.** The owner plays the campaign blind. The UI reveals a challenge's name only
    once the crew has reached it; unvisited rooms show as "Challenge N". Hidden information is only
    ever a pointer ("p. 114, #2"), shown at the moment the book would send you there.
    In chat, do not quote or summarise story content from the book or from `docs/campaign-data.md`.
+   Room layouts, briefings and the book's room text are spoilers too: the UI shows them only for the room the crew
+   has reached, and warns about spoilers before a room is entered (at the exits and on the set-out bar).
 3. **No git writes** (`add` / `commit` / `push`) — tell the owner when one is needed.
 4. **Nothing leaves the browser.** No analytics, CDNs, web fonts, or external requests.
 

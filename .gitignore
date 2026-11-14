@@ -2,3 +2,6 @@
 .DS_Store
 # the rulebook is paid and watermarked — never commit it
 *.pdf
+# private links and local-only rulebook data
+.env
+local/
