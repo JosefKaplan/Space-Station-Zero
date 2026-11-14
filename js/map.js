@@ -42,8 +42,10 @@ export function fallenByChallenge(state) {
   for (const crew of state.station.pastCrews) {
     for (const { name, challenge } of crew.fallen) add(challenge, { name, crewName: crew.name, isCurrentCrew: false });
   }
-  for (const member of state.run?.crew.members ?? []) {
-    if (member.status === 'dead') add(member.diedInChallenge, { name: member.name, crewName: state.run.crew.name, isCurrentCrew: true });
+  for (const crew of state.run?.crews ?? []) {
+    for (const member of crew.members) {
+      if (member.status === 'dead') add(member.diedInChallenge, { name: member.name, crewName: crew.name, isCurrentCrew: true });
+    }
   }
   return fallen;
 }

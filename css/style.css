@@ -143,10 +143,6 @@ label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted)
 .log, .plain { list-style: none; margin: 0; padding: 0; }
 .log li:first-child { border-top: 0; }
 
-.setup-steps { margin: 0 0 14px; padding-left: 22px; }
-.setup-steps > li { margin-bottom: 12px; padding-left: 4px; }
-.setup-steps > li::marker { color: var(--accent); font: 800 18px var(--display); }
-.setup-steps button { display: block; margin-top: 8px; }
 .terrain-board { display: block; width: 100%; height: auto; margin: 10px 0 6px; user-select: none; -webkit-user-select: none; }
 .board-fill { fill: var(--field); }
 .board-grid { fill: none; stroke: var(--line); stroke-width: .4; opacity: .55; }
@@ -259,8 +255,6 @@ nav button.active { color: var(--accent); border-top-color: var(--accent); }
 
 .picker { margin: -2px 0 8px; color: var(--muted); }
 
-.briefing h4, .setup-steps h4 { margin: 12px 0 4px; color: var(--pink); font: 700 12px var(--mono), monospace; letter-spacing: .1em; text-transform: uppercase; }
-.briefing-list li { margin-bottom: 4px; }
 .deadline { color: var(--danger); font-weight: 700; margin: 8px 0 4px; }
 .goal { margin: 4px 0 8px; }
 .swatch { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; border: 2px solid; }
@@ -362,3 +356,25 @@ table.enemy-stats td, table.enemy-stats tbody th, table.rules-table td { backgro
 table.enemy-stats, table.rules-table, details, summary { forced-color-adjust: none; }
 .lore-box { margin-top: 10px; }
 .lore-box .lore { padding: 4px 2px 0; }
+
+.playthrough-button { margin-left: auto; max-width: 52%; min-height: 44px; padding: 4px 12px; text-align: left; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playthrough-button small { display: block; color: var(--muted); font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.playthrough-item.active { border-left-color: var(--accent); }
+.playthrough-menu h3 { margin: 14px 0 6px; }
+@media (max-width: 430px) {
+  header h1 { font-size: 22px; }
+  header span { letter-spacing: .1em; }
+  .playthrough-button { max-width: 46%; padding: 4px 10px; }
+}
+
+/* a party of crews: each crew's cards carry its own colour on the left */
+.crew-group { margin-bottom: 18px; }
+.crew-group > .card, .crew-group > button { border-left: 6px solid var(--crew-color, var(--ok)); }
+.crew-group.crew-0 { --crew-color: var(--ok); }
+.crew-group.crew-1 { --crew-color: var(--pink); }
+.crew-group.crew-2 { --crew-color: var(--accent); }
+.crew-group.crew-3 { --crew-color: #7aa2ff; }
+table.enemy-stats tr.not-yours > * { opacity: .35; }
+
+.totp-qr { display: block; width: 200px; max-width: 100%; margin: 8px auto; background: #fff; padding: 8px; border-radius: 6px; }
+button[disabled] { opacity: .5; cursor: progress; }

@@ -5,6 +5,9 @@ A tiny, free, offline-friendly campaign companion for the miniatures game
 
 It replaces the paper roster and the "wait, which room were we in?" notes:
 
+- **Playthroughs** — keep several named campaigns side by side (solo, co-op, a second try): each has its own crew, route, log, agenda progress and station legacy. Switch from the header.
+- **Party** — 1 to 4 crews in one playthrough (two players, say): they travel together, each with its own roster, XP and agenda. Enemy counts follow the number of crews, and the co-op stat bars light up.
+- **Sync (optional)** — keep a copy of every playthrough in your own free Supabase database, behind your password and a TOTP code, so a cleared browser or a new phone loses nothing ([`docs/SYNC.md`](docs/SYNC.md)). Off until you set it up; nothing leaves the browser without it.
 - **Journey** — where your crew is, which exits are open, where you can backtrack to, and what is sealed behind you.
 - **Station map** — a map that fills in as you explore: your route, sealed sections, where crew members fell, and the faint trails of crews that came before.
 - **Roster** — commander and crew with stats, damage, XP, and reminders when someone has earned an advancement.
@@ -13,28 +16,56 @@ It replaces the paper roster and the "wait, which room were we in?" notes:
 - **Captain's log** — an automatic timeline of the run plus your own notes, exportable as text.
 - **Dice** — a d12 pool roller that counts successes for you.
 - **Room set-up** — rolls the book's random terrain and sketches it on the board with distances from the edges, around
-  the room's own footprint (fixed terrain, enemy spots, crew zone) if you import your private room layouts.
+  the room's own footprint (fixed terrain, enemy spots, crew zone) from your private room layouts.
 
 It is spoiler-safe: rooms are revealed only when you reach them, and secrets stay in the book —
 the app just tells you which page to open.
 
-> You need the rulebook to play. This app contains no rules text, maps, or story — only numbers,
-> names, and page references. Room layouts are the one thing that comes from the book's maps: they are never in
-> this repo, only in a private file you import yourself (see below). Unofficial fan project, not affiliated
-> with Snarling Badger Studios.
+> You need the rulebook to play. This repo contains no rules text, maps, or story — only numbers,
+> names, and page references. The room layouts and the book's room text are the one thing that comes from the book:
+> they are never in this repo, only in a private local file you build yourself (see below). Unofficial fan project, not
+> affiliated with Snarling Badger Studios.
+
+## Built with
+
+Plain HTML, CSS and JavaScript (ES modules, no framework, no build step, no dependencies), SVG for the maps, `localStorage`
+for the saves, GitHub Pages for hosting, and optionally your own Supabase project (Postgres and Auth) for synced saves.
 
 ## Use it
 
 Open the GitHub Pages URL of this repo. Everything is stored in your browser (`localStorage`);
-use **Export** to back up or move a campaign to another device, **Import** to load it.
+use **Export** to back up or move all playthroughs to another device, **Import** to load them (a backup replaces everything; the save of a single campaign is added as a new playthrough).
+Or set up the optional sync below and your saves follow you to every device.
+
+## Optional: sync your saves (Supabase)
+
+Without this, saves live in one browser only and a cleared browser loses them. With it, every playthrough is also kept in
+your own free Supabase database, locked behind your password **and** an authenticator (TOTP) code, so nothing is lost and
+every device sees the same campaigns. Nothing is sent anywhere until you sign in. Full guide: [`docs/SYNC.md`](docs/SYNC.md).
+
+One-time setup, about 10 minutes:
+
+1. Create a free project at [supabase.com](https://supabase.com).
+2. **SQL Editor**: paste and run [`docs/supabase-setup.sql`](docs/supabase-setup.sql). It makes the `playthroughs` table and the
+   rule that only your own TOTP-verified session can touch it.
+3. **Authentication → Sign In / Providers**: switch **off** "Allow new users to sign up", set the minimum password length
+   to 12 or more, and (not required) switch off "Enable magic links and email OTP".
+4. **Authentication → Users → Add user**: your email and a long password, "Auto Confirm User" ticked.
+   Check that **Authentication → Multi-Factor** has TOTP enabled.
+5. **Project Settings → API Keys**: copy the project URL and the **publishable** key into [`js/config.js`](js/config.js).
+   Both are public by design. Never put a secret or `service_role` key anywhere in this repo.
+6. Open the app, then **Settings → Sync**: sign in. The first time, scan the QR code with an authenticator app and type
+   the 6-digit code. Do this once on each address you use (localhost, your GitHub Pages URL, ...).
+
+Keep the authenticator's secret in a password manager too: losing it locks you out of the cloud copy (the local copy still works).
 
 ## Room layouts (optional, private)
 
-Run from the project folder (`python3 -m http.server 8000`), the app loads `local/room-layouts.json` **by itself** at every
-start, no import needed. Anywhere else (GitHub Pages, a phone opening the Pages address) use Settings → **Import room
-layouts**, which loads a JSON file with each room's fixed terrain, enemy areas, objective markers
-and crew starting zone, so the sketch matches the book's map. It is stored in your browser only and the repo never contains it
-(`local/` is gitignored — keep the file there). Without it the app works as before.
+Run from the project folder (`python3 -m http.server 8000`), the app loads `local/room-layouts.json` by itself at every
+start: each room's fixed terrain, enemy areas, objective markers, crew starting zone, briefing and the book's text, so the
+sketch matches the book's map. It is kept in your browser's storage afterwards and the repo never contains it (`local/` is
+gitignored). Served from anywhere else (GitHub Pages) there is no such file and the app works without the room layouts.
+Open the app on your phone through your computer's server (`http://<your computer's address>:8000`) to get them there too.
 
 ```json
 { "schemaVersion": 2,
@@ -96,10 +127,12 @@ After that, every push to `main` redeploys automatically (progress is under the 
 If the phone still shows the old version, reload the page.
 
 Saves are per browser and per address: a campaign started on `localhost` does not appear on the
-GitHub Pages address. Move it with **Settings → Export save** and **Import save**.
+GitHub Pages address by itself. Either sign in to the sync (above) on both, or move it with **Settings → Export save** and
+**Import save**. The sync works from any address, Pages included; the room layouts below do not (they are local only).
 
 ## Docs
 
 - [`docs/ANALYSIS.md`](docs/ANALYSIS.md) — concept, scope, data model, implementation plan (spoiler-free)
 - [`docs/campaign-data.md`](docs/campaign-data.md) — campaign graph used to build the app (**spoilers**)
+- [`docs/SYNC.md`](docs/SYNC.md) — optional save sync: setup, how it is locked down, how it behaves
 - [`CLAUDE.md`](CLAUDE.md) — working rules for AI-assisted development

@@ -7,10 +7,13 @@ import {
 import { isValidTerrain } from './terrain.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;   // of one playthrough's state (station + run)
+const STORE_VERSION = 6;    // of what is saved: a list of named playthroughs
+const MAX_PLAYTHROUGH_NAME_LENGTH = 40;
+export const MAX_CREWS = 4;   // crews travelling together in one playthrough
 const MEMBER_STATUSES = ['active', 'recovering', 'dead'];
 
-export function createEmptyState() {
+function createEmptyState() {
   return {
     schemaVersion: SCHEMA_VERSION,
     // station survives across crews; run is one crew's campaign
@@ -64,6 +67,15 @@ function migrateFromVersion4(saved) {
   saved.schemaVersion = 5;
 }
 
+// v5 had one crew per run; v6 has a party of crews that travel together
+function migrateFromVersion5(saved) {
+  if (saved.run) {
+    saved.run.crews = [{ id: newId(), ...saved.run.crew }];
+    delete saved.run.crew;
+  }
+  saved.schemaVersion = 6;
+}
+
 function requireValid(condition, what) {
   if (!condition) throw new Error(`Save data is damaged: ${what}.`);
 }
@@ -87,19 +99,26 @@ function assertValidState(saved) {
       && (entry.challenge === null || isChallengeNumber(entry.challenge)))), 'previous crews');
   if (run === null) return;
 
-  requireValid(isPlainObject(run) && isPlainObject(run.crew), 'crew is missing');
-  const { crew } = run;
-  requireValid(typeof crew.name === 'string' && typeof crew.edge === 'string', 'crew name or edge');
-  requireValid(crew.size in BASE_STATS_BY_CREW_SIZE && crew.shipType in SHIP_TYPES, 'crew size or ship type');
-  requireValid(crew.agenda === '' || crew.agenda in AGENDAS, 'secondary agenda');
-  requireValid(Array.isArray(crew.members) && crew.members.length > 0, 'crew members');
-  crew.members.forEach((member, index) => {
-    requireValid(isPlainObject(member)
-      && ['id', 'name', 'type', 'abilities', 'equipment'].every((field) => typeof member[field] === 'string')
-      && typeof member.isCommander === 'boolean' && MEMBER_STATUSES.includes(member.status)
-      && (member.diedInChallenge === null || isChallengeNumber(member.diedInChallenge))
-      && isPlainObject(member.stats) && STAT_KEYS.every((stat) => isCount(member.stats[stat]))
-      && ['damage', 'xp', 'advancementsTaken'].every((field) => isCount(member[field])), `crew member ${index + 1}`);
+  requireValid(isPlainObject(run) && Array.isArray(run.crews) && run.crews.length >= 1 && run.crews.length <= MAX_CREWS, 'the crews');
+  const crewIds = new Set();
+  const memberIds = new Set();
+  run.crews.forEach((crew, crewIndex) => {
+    requireValid(isPlainObject(crew) && typeof crew.id === 'string' && crew.id !== '' && !crewIds.has(crew.id), `crew ${crewIndex + 1} id`);
+    crewIds.add(crew.id);
+    requireValid(typeof crew.name === 'string' && typeof crew.edge === 'string', 'crew name or edge');
+    requireValid(crew.size in BASE_STATS_BY_CREW_SIZE && crew.shipType in SHIP_TYPES, 'crew size or ship type');
+    requireValid(crew.agenda === '' || crew.agenda in AGENDAS, 'secondary agenda');
+    requireValid(Array.isArray(crew.members) && crew.members.length > 0, 'crew members');
+    crew.members.forEach((member, index) => {
+      requireValid(isPlainObject(member)
+        && ['id', 'name', 'type', 'abilities', 'equipment'].every((field) => typeof member[field] === 'string')
+        && !memberIds.has(member.id)
+        && typeof member.isCommander === 'boolean' && MEMBER_STATUSES.includes(member.status)
+        && (member.diedInChallenge === null || isChallengeNumber(member.diedInChallenge))
+        && isPlainObject(member.stats) && STAT_KEYS.every((stat) => isCount(member.stats[stat]))
+        && ['damage', 'xp', 'advancementsTaken'].every((field) => isCount(member[field])), `crew ${crewIndex + 1}, member ${index + 1}`);
+      memberIds.add(member.id);
+    });
   });
   requireValid(isChallengeNumber(run.currentChallenge), 'current challenge');
   requireValid(isChallengeList(run.cleared) && isChallengeList(run.sealed), 'cleared or sealed challenges');
@@ -111,26 +130,268 @@ function assertValidState(saved) {
     && typeof entry.at === 'string' && typeof entry.text === 'string' && typeof entry.isNote === 'boolean'), 'log');
 }
 
-export function parseSavedState(text) {
-  const saved = JSON.parse(text);
-  if (!isPlainObject(saved) || ![1, 2, 3, 4, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+// one playthrough's state, brought up to the current version and checked
+function migratedState(saved) {
+  if (!isPlainObject(saved) || ![1, 2, 3, 4, 5, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
   if (saved.schemaVersion === 2) migrateFromVersion2(saved);
   if (saved.schemaVersion === 3) migrateFromVersion3(saved);
   if (saved.schemaVersion === 4) migrateFromVersion4(saved);
+  if (saved.schemaVersion === 5) migrateFromVersion5(saved);
   assertValidState(saved);
   return saved;
 }
 
-export function loadState() {
-  const rawSave = localStorage.getItem(STORAGE_KEY);
-  return rawSave === null ? createEmptyState() : parseSavedState(rawSave);
+// ---------- playthroughs ----------
+// What is saved is { schemaVersion: 6, activeId, playthroughs: [{ id, name, state, updatedAt }], deletedIds: [{ id, at }] }. Each playthrough is a whole,
+// separate campaign (its own station layer and run). The app works on the active one's `state` object directly, so
+// everything that changes it only has to call saveState().
+
+let store = null;
+// what each playthrough looked like when it was last saved, by id: a save that changes nothing does not count as a change
+const lastSavedJsonById = new Map();
+const changeListeners = [];
+
+const jsonOfEntry = (entry) => JSON.stringify([entry.name, entry.state]);
+
+function rememberSavedEntries() {
+  lastSavedJsonById.clear();
+  for (const entry of store.playthroughs) lastSavedJsonById.set(entry.id, jsonOfEntry(entry));
 }
 
-export function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+// called (with the playthrough's id) after a save that really changed a playthrough, or deleted one
+export function onPlaythroughChange(listener) {
+  changeListeners.push(listener);
+}
+
+function newPlaythroughId() {
+  return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function validatedPlaythroughName(name, otherNames) {
+  const trimmed = String(name ?? '').trim();
+  if (trimmed === '') throw new Error('Give the playthrough a name.');
+  if (trimmed.length > MAX_PLAYTHROUGH_NAME_LENGTH) throw new Error(`Keep the name to ${MAX_PLAYTHROUGH_NAME_LENGTH} characters.`);
+  if (otherNames.some((other) => other.toLowerCase() === trimmed.toLowerCase())) throw new Error(`There is already a playthrough called "${trimmed}".`);
+  return trimmed;
+}
+
+function freshStore() {
+  const id = newPlaythroughId();
+  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: createEmptyState(), updatedAt: Date.now() }], deletedIds: [] };
+}
+
+// a save from before playthroughs existed is one playthrough
+function storeFromSingleState(state) {
+  const id = newPlaythroughId();
+  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: migratedState(state), updatedAt: Date.now() }], deletedIds: [] };
+}
+
+function validatedStore(saved) {
+  requireValid(Array.isArray(saved.playthroughs) && saved.playthroughs.length > 0, 'the list of playthroughs');
+  const ids = new Set();
+  for (const entry of saved.playthroughs) {
+    requireValid(isPlainObject(entry) && typeof entry.id === 'string' && entry.id !== '' && !ids.has(entry.id), 'a playthrough id');
+    requireValid(typeof entry.name === 'string' && entry.name.trim() !== '' && entry.name.length <= MAX_PLAYTHROUGH_NAME_LENGTH, 'a playthrough name');
+    ids.add(entry.id);
+    entry.state = migratedState(entry.state);
+    // a store from before syncing has no change times: it counts as changed just now, so it wins the first sync
+    if (!Number.isFinite(entry.updatedAt)) entry.updatedAt = Date.now();
+  }
+  saved.deletedIds = (Array.isArray(saved.deletedIds) ? saved.deletedIds : []).filter((marker) => isPlainObject(marker) && typeof marker.id === 'string' && Number.isFinite(marker.at));
+  requireValid(ids.has(saved.activeId), 'the active playthrough');
+  return saved;
+}
+
+// a single campaign's save also has a schemaVersion that may equal STORE_VERSION: tell them apart by the list
+const isStoreOfPlaythroughs = (saved) => isPlainObject(saved) && Array.isArray(saved.playthroughs);
+
+function storeFromText(text) {
+  const saved = JSON.parse(text);
+  return isStoreOfPlaythroughs(saved) ? validatedStore(saved) : storeFromSingleState(saved);
+}
+
+function activeEntry() {
+  return store.playthroughs.find((entry) => entry.id === store.activeId);
+}
+
+export function loadState() {
+  const rawSave = localStorage.getItem(STORAGE_KEY);
+  store = rawSave === null ? freshStore() : storeFromText(rawSave);
+  rememberSavedEntries();
+  return activeEntry().state;
+}
+
+// the active playthrough's state object: it is replaced when a sync brings in a newer copy of it
+export function activeState() {
+  return activeEntry().state;
+}
+
+// writes every playthrough: the active one's state is changed in place, so it is already what is stored
+export function saveState() {
+  const entry = activeEntry();
+  const json = jsonOfEntry(entry);
+  const hasChanged = lastSavedJsonById.get(entry.id) !== json;
+  if (hasChanged) {
+    entry.updatedAt = Date.now();
+    lastSavedJsonById.set(entry.id, json);
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  if (hasChanged) changeListeners.forEach((listener) => listener(entry.id));
+}
+
+export function listPlaythroughs() {
+  return store.playthroughs.map((entry) => ({ id: entry.id, name: entry.name, isActive: entry.id === store.activeId, state: entry.state }));
+}
+
+export function activePlaythroughName() {
+  return activeEntry().name;
+}
+
+export function switchPlaythrough(id) {
+  const entry = store.playthroughs.find((candidate) => candidate.id === id);
+  if (!entry) throw new Error('That playthrough no longer exists.');
+  store.activeId = id;
+  saveState();
+  return entry.state;
+}
+
+export function addPlaythrough(name) {
+  const trimmed = validatedPlaythroughName(name, store.playthroughs.map((entry) => entry.name));
+  const entry = { id: newPlaythroughId(), name: trimmed, state: createEmptyState(), updatedAt: Date.now() };
+  store.playthroughs.push(entry);
+  store.activeId = entry.id;
+  saveState();
+  return entry.state;
+}
+
+export function renameActivePlaythrough(name) {
+  const others = store.playthroughs.filter((entry) => entry.id !== store.activeId).map((entry) => entry.name);
+  activeEntry().name = validatedPlaythroughName(name, others);
+  saveState();
+}
+
+// the one after it (or before, for the last) becomes active; the only playthrough cannot be deleted
+export function deleteActivePlaythrough() {
+  if (store.playthroughs.length === 1) throw new Error('This is the only playthrough: add another one first, or wipe everything.');
+  const index = store.playthroughs.findIndex((entry) => entry.id === store.activeId);
+  const [removed] = store.playthroughs.splice(index, 1);
+  lastSavedJsonById.delete(removed.id);
+  store.deletedIds.push({ id: removed.id, at: Date.now() });
+  store.activeId = store.playthroughs[Math.min(index, store.playthroughs.length - 1)].id;
+  saveState();
+  changeListeners.forEach((listener) => listener(removed.id));
+  return activeEntry().state;
+}
+
+export function wipeEverything() {
+  const removedIds = store.playthroughs.map((entry) => entry.id);
+  store = freshStore();
+  store.deletedIds = removedIds.map((id) => ({ id, at: Date.now() }));
+  rememberSavedEntries();
+  saveState();
+  removedIds.forEach((id) => changeListeners.forEach((listener) => listener(id)));
+  return activeEntry().state;
+}
+
+export function exportSaveText() {
+  return JSON.stringify(store, null, 2);
+}
+
+// A backup of everything replaces everything; the save of a single campaign (from before playthroughs, or one
+// exported long ago) is added as a new playthrough, so nothing you have is overwritten. Returns the active state.
+export function importSave(text) {
+  const saved = JSON.parse(text);
+  if (isStoreOfPlaythroughs(saved)) {
+    store = validatedStore(saved);
+    rememberSavedEntries();
+  } else {
+    const state = migratedState(saved);
+    const baseName = 'Imported save';
+    const names = store.playthroughs.map((entry) => entry.name);
+    let name = baseName;
+    for (let number = 2; names.includes(name); number += 1) name = `${baseName} ${number}`;
+    const entry = { id: newPlaythroughId(), name, state, updatedAt: Date.now() };
+    store.playthroughs.push(entry);
+    store.activeId = entry.id;
+  }
+  saveState();
+  return activeEntry().state;
+}
+
+// ---------- for syncing (js/cloud-sync.js) ----------
+
+// the empty "Playthrough 1" a brand-new browser starts with, never touched: it is not worth uploading, and it makes
+// way for playthroughs that arrive from the cloud
+const isUntouchedStarter = (entry) => entry.name === 'Playthrough 1' && JSON.stringify(entry.state) === JSON.stringify(createEmptyState());
+
+// Rows from the cloud are untrusted: each one is checked like an imported save, and a bad one is skipped and reported.
+// Returns { changed: boolean (anything local changed), activeReplaced: boolean (the active state object is a new one) }.
+export function mergeRemotePlaythroughs(rows) {
+  const result = { changed: false, activeReplaced: false, skipped: [] };
+  const deletedLocally = new Set(store.deletedIds.map((marker) => marker.id));
+  for (const row of rows) {
+    if (deletedLocally.has(row.id)) continue;   // deleted here: the marker is uploaded instead
+    const local = store.playthroughs.find((entry) => entry.id === row.id);
+    try {
+      if (row.deleted) {
+        if (local && row.updated_at >= local.updatedAt && store.playthroughs.length > 1) {
+          store.playthroughs = store.playthroughs.filter((entry) => entry !== local);
+          lastSavedJsonById.delete(local.id);
+          if (store.activeId === local.id) { store.activeId = store.playthroughs[0].id; result.activeReplaced = true; }
+          result.changed = true;
+        }
+        continue;
+      }
+      if (local && row.updated_at <= local.updatedAt) continue;
+      requireValid(typeof row.id === 'string' && row.id !== '' && typeof row.name === 'string' && row.name.trim() !== ''
+        && row.name.length <= MAX_PLAYTHROUGH_NAME_LENGTH && Number.isFinite(row.updated_at), 'a playthrough from the cloud');
+      const state = migratedState(structuredClone(row.state));
+      if (local) {
+        Object.assign(local, { name: row.name, state, updatedAt: row.updated_at });
+        if (store.activeId === local.id) result.activeReplaced = true;
+      } else {
+        store.playthroughs.push({ id: row.id, name: row.name, state, updatedAt: row.updated_at });
+      }
+      lastSavedJsonById.set(row.id, jsonOfEntry(store.playthroughs.find((entry) => entry.id === row.id)));
+      result.changed = true;
+    } catch (error) {
+      result.skipped.push(`${row.name ?? row.id}: ${error.message}`);
+    }
+  }
+  const starter = store.playthroughs.find(isUntouchedStarter);
+  if (result.changed && starter && store.playthroughs.length > 1) {
+    store.playthroughs = store.playthroughs.filter((entry) => entry !== starter);
+    lastSavedJsonById.delete(starter.id);
+    if (store.activeId === starter.id) { store.activeId = store.playthroughs[0].id; result.activeReplaced = true; }
+  }
+  if (result.changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  return result;
+}
+
+// what the cloud lacks or has an older version of, as rows ready to upload (tombstones for deletions included)
+export function rowsToUpload(remoteUpdatedAtById) {
+  const rows = store.playthroughs
+    .filter((entry) => !isUntouchedStarter(entry))
+    .filter((entry) => !remoteUpdatedAtById.has(entry.id) || entry.updatedAt > remoteUpdatedAtById.get(entry.id))
+    .map((entry) => ({ id: entry.id, name: entry.name, state: entry.state, updated_at: entry.updatedAt, deleted: false }));
+  // a deletion only needs telling to the cloud if the cloud has the playthrough at all
+  const tombstones = store.deletedIds
+    .filter((marker) => remoteUpdatedAtById.has(marker.id))
+    .map((marker) => ({ id: marker.id, name: 'deleted', state: {}, updated_at: marker.at, deleted: true }));
+  return { rows, tombstones };
+}
+
+// markers that reached the cloud (or concern things the cloud never had) are no longer needed
+export function forgetDeletionMarkers(ids) {
+  store.deletedIds = store.deletedIds.filter((marker) => !ids.includes(marker.id));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+}
+
+export function pendingDeletionIds() {
+  return store.deletedIds.map((marker) => marker.id);
 }
 
 export function isCurrentChallengeCleared(run) {
@@ -172,7 +433,14 @@ export function addLogEntry(run, text, isNote = false) {
   run.log.push({ challenge: run.currentChallenge, at: new Date().toISOString(), text, isNote });
 }
 
-export function startNewCrew(state, { name, size, shipType, edge, agenda, commanderName, commanderPoints, memberNames, memberTypes }) {
+export const allMembers = (run) => run.crews.flatMap((crew) => crew.members);
+
+// the first crew starts the run; the others join it (up to MAX_CREWS), all travelling together from then on
+export function addCrew(state, { name, size, shipType, edge, agenda, commanderName, commanderPoints, memberNames, memberTypes }) {
+  if (state.run?.ended) throw new Error('This run has ended: retire the party to start a new one.');
+  if (state.run && state.run.crews.length >= MAX_CREWS) throw new Error(`A party has at most ${MAX_CREWS} crews.`);
+  const rival = agenda && state.run?.crews.find((crew) => crew.agenda === agenda);
+  if (rival) throw new Error(`${rival.name} is already chasing the ${AGENDAS[agenda].name} agenda: progress is counted per agenda, so pick another.`);
   const baseStats = BASE_STATS_BY_CREW_SIZE[size];
   const ship = SHIP_TYPES[shipType];
   const chosenTypes = memberTypes.slice(0, size);
@@ -193,12 +461,28 @@ export function startNewCrew(state, { name, size, shipType, edge, agenda, comman
   if (agenda && (state.station.agendaProgress[agenda] ?? 0) >= AGENDAS[agenda].partsNeeded) {
     state.station.agendaProgress[agenda] = 0;
   }
+  const crew = { id: newId(), name: name || 'Unnamed crew', size, shipType, edge, agenda, members };
+  if (state.run) {
+    state.run.crews.push(crew);
+    addLogEntry(state.run, `${crew.name} joins the party.`);
+    return;
+  }
   state.run = {
-    crew: { name: name || 'Unnamed crew', size, shipType, edge, agenda, members },
+    crews: [crew],
     currentChallenge: STARTING_CHALLENGE, route: [STARTING_CHALLENGE], cleared: [], sealed: [], log: [], ended: null,
     roomSetup: newRoomSetup(),
   };
-  addLogEntry(state.run, `${state.run.crew.name} leaves Dock Zero.`);
+  addLogEntry(state.run, `${crew.name} leaves Dock Zero.`);
+}
+
+// a crew leaves the party (the last one cannot: retire the party instead); it is remembered like a retired crew
+export function removeCrew(state, crewId) {
+  const run = state.run;
+  if (run.crews.length === 1) throw new Error('This is the only crew: retire the party instead.');
+  const crew = run.crews.find((candidate) => candidate.id === crewId);
+  run.crews = run.crews.filter((candidate) => candidate !== crew);
+  state.station.pastCrews.push(pastCrewRecord(run, crew, 'left the party'));
+  addLogEntry(run, `${crew.name} leaves the party.`);
 }
 
 export function pendingAdvancement(member) {
@@ -219,23 +503,23 @@ export function takeAdvancement(member, chosenStat) {
   member.advancementsTaken += 1;
 }
 
-export function agendaProgress(state) {
-  const agendaKey = state.run?.crew.agenda;
+export function agendaProgress(state, crew) {
+  const agendaKey = crew.agenda;
   if (!agendaKey) return null;
   const found = state.station.agendaProgress[agendaKey] ?? 0;
   const { partsNeeded } = AGENDAS[agendaKey];
   return { agendaKey, found, partsNeeded, isComplete: found >= partsNeeded };
 }
 
-export function canAdvanceAgendaInCurrentChallenge(state) {
-  const progress = agendaProgress(state);
+export function canAdvanceAgendaInCurrentChallenge(state, crew) {
+  const progress = agendaProgress(state, crew);
   return Boolean(progress && !progress.isComplete
     && CHALLENGES[state.run.currentChallenge].agendas?.includes(progress.agendaKey));
 }
 
 // the map marks where each crew member fell; a death undone on the roster loses its mark
 export function recordDeathLocations(run) {
-  for (const member of run.crew.members) {
+  for (const member of allMembers(run)) {
     if (member.status !== 'dead') member.diedInChallenge = null;
     else member.diedInChallenge ??= run.currentChallenge;
   }
@@ -258,13 +542,13 @@ function applyInjury(member, outcome, chosenStat) {
 }
 
 // draft: { downed: { [memberId]: { roll, stat } }, bonusXp: { [memberId]: number },
-//          agendaPartFound, legacyEarned, note }
+//          agendaPartFoundByCrew: { [crewId]: boolean }, legacyEarned, note }   (member ids are unique across crews)
 export function completeCurrentChallenge(state, draft) {
   const run = state.run;
   if (isCurrentChallengeCleared(run)) throw new Error(`Challenge ${run.currentChallenge} is already cleared.`);
   const challenge = CHALLENGES[run.currentChallenge];
-  const participants = run.crew.members.filter((member) => member.status === 'active');
-  const benchedLastChallenge = run.crew.members.filter((member) => member.status === 'recovering');
+  const participants = allMembers(run).filter((member) => member.status === 'active');
+  const benchedLastChallenge = allMembers(run).filter((member) => member.status === 'recovering');
 
   // validate everything before changing anything
   const injuries = participants.filter((member) => draft.downed[member.id]).map((member) => {
@@ -285,15 +569,16 @@ export function completeCurrentChallenge(state, draft) {
       + Math.max(0, Math.trunc(Number(draft.bonusXp[member.id]) || 0));
   }
   for (const member of benchedLastChallenge) member.status = 'active';
-  for (const member of run.crew.members) member.damage = 0;
+  for (const member of allMembers(run)) member.damage = 0;
 
   const logLines = [`Cleared Challenge ${run.currentChallenge} — ${challenge.name}.`, ...injurySummaries];
 
-  if (draft.agendaPartFound && canAdvanceAgendaInCurrentChallenge(state)) {
-    const progressBefore = agendaProgress(state);
+  for (const crew of run.crews) {
+    if (!draft.agendaPartFoundByCrew?.[crew.id] || !canAdvanceAgendaInCurrentChallenge(state, crew)) continue;
+    const progressBefore = agendaProgress(state, crew);
     state.station.agendaProgress[progressBefore.agendaKey] = progressBefore.found + 1;
-    const progressAfter = agendaProgress(state);
-    logLines.push(`${AGENDAS[progressAfter.agendaKey].name} agenda: ${progressAfter.found}/${progressAfter.partsNeeded}`
+    const progressAfter = agendaProgress(state, crew);
+    logLines.push(`${crew.name}, ${AGENDAS[progressAfter.agendaKey].name} agenda: ${progressAfter.found}/${progressAfter.partsNeeded}`
       + (progressAfter.isComplete ? ' — complete.' : '.'));
   }
   if (draft.legacyEarned && challenge.canEarnLegacy) {
@@ -310,9 +595,9 @@ export function completeCurrentChallenge(state, draft) {
   if (draft.note?.trim()) addLogEntry(run, draft.note.trim(), true);
 
   const hasExits = challenge.exits || challenge.exitRoll;
-  if (run.crew.members.every((member) => member.status === 'dead')) {
+  if (allMembers(run).every((member) => member.status === 'dead')) {
     run.ended = 'lost';
-    addLogEntry(run, 'The crew is lost to the station.');
+    addLogEntry(run, run.crews.length > 1 ? 'The whole party is lost to the station.' : 'The crew is lost to the station.');
   } else if (!hasExits) {
     run.ended = 'victory';
     addLogEntry(run, 'The journey ends here.');
@@ -332,22 +617,27 @@ export function moveToChallenge(run, destination, viaLabel) {
   run.roomSetup = newRoomSetup();
 }
 
-export function retireCrew(state) {
-  const run = state.run;
-  state.station.pastCrews.push({
-    name: run.crew.name,
-    outcome: run.ended ?? 'retired',
+function pastCrewRecord(run, crew, outcome) {
+  return {
+    name: crew.name,
+    outcome,
     endedInChallenge: run.currentChallenge,
     challengesCleared: run.cleared.length,
-    route: run.route,
-    fallen: run.crew.members.filter((member) => member.status === 'dead')
+    route: [...run.route],
+    fallen: crew.members.filter((member) => member.status === 'dead')
       .map((member) => ({ name: member.name, challenge: member.diedInChallenge })),
-  });
+  };
+}
+
+// the whole party is archived, every crew on its own; the station keeps agenda progress and legacy
+export function retireParty(state) {
+  const run = state.run;
+  for (const crew of run.crews) state.station.pastCrews.push(pastCrewRecord(run, crew, run.ended ?? 'retired'));
   state.run = null;
 }
 
 export function logAsMarkdown(run) {
-  const lines = [`# Captain's Log — ${run.crew.name}`];
+  const lines = [`# Captain's Log — ${run.crews.map((crew) => crew.name).join(' & ')}`];
   let lastChallenge = null;
   for (const entry of run.log) {
     if (entry.challenge !== lastChallenge) {

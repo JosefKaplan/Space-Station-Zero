@@ -71,7 +71,7 @@ One screen per job, bottom tab bar, phone-first.
 
 - Enemy AI, combat resolution, the book's room maps, turn/initiative tracking.
 - Rule text, ability descriptions, crew-building validation.
-- Skirmish mode, co-op with multiple rosters (one roster per save; co-op players each open the app).
+- Skirmish mode.
 - Accounts, cloud sync, PWA/service worker. Revisit only if actually missed.
 
 ## 4. Tech
@@ -93,21 +93,28 @@ build step for ~500 lines of UI.
 
 ## 5. Data model
 
+What is saved (key `ssz-captains-log`) is a list of named **playthroughs**, each a whole separate campaign (own
+station layer and run); the app works on the active one's `state` object directly. A save from before playthroughs
+loads as "Playthrough 1" and is rewritten on the first change.
+
 ```text
-// localStorage key (shape sketch, not runnable code) "ssz-captains-log"
+// the saved store (shape sketch, not runnable code)
+{ schemaVersion: 6, activeId, playthroughs: [{ id, name /* unique, 1-40 chars */, state /* the shape below */ }] }
+
+// one playthrough's state (its own schemaVersion is 6; 5 had a single `run.crew`)
 {
-  schemaVersion: 4,
+  schemaVersion: 6,
   station: {                       // survives across crews
     agendaProgress: { data: 1 },   // parts found by any crew
     legacyCount: 0,                // campaign-wide unlock, capped in data.js
     pastCrews: [{ name, outcome, endedInChallenge, challengesCleared,
                  route: [...], fallen: [{ name, challenge }] }]   // drawn as ghosts on the map
   },
-  run: {                           // one crew's campaign; null before the first crew
-    crew: { name, size: 4|6|8, shipType, edge, agenda,
-            members: [{ id, name, type, isCommander, stats: {lf,mv,co,re,in},
-                        damage, xp, advancementsTaken, abilities, equipment,
-                        status: "active"|"recovering"|"dead", diedInChallenge }] },
+  run: {                           // the party's campaign; null before the first crew
+    crews: [{ id, name, size: 4|6|8, shipType, edge, agenda,   // 1 to 4 crews, travelling together
+              members: [{ id /* unique across crews */, name, type, isCommander, stats: {lf,mv,co,re,in},
+                          damage, xp, advancementsTaken, abilities, equipment,
+                          status: "active"|"recovering"|"dead", diedInChallenge }] }],
     currentChallenge: 1,
     route: [1],                    // every room entered, in order, backtracks included
     cleared: [],                   // challenge numbers; "is the current room cleared" and "visited" derive from it
@@ -183,15 +190,15 @@ General terrain (`js/terrain.js`, table and sizes in `js/data.js`):
 - Not built: tickable steps, keeping a room's layout after leaving it, dragging pieces, scatter terrain.
 
 Room layouts (`js/room-layouts.js`, optional): the room's own footprint comes from the owner's private
-`local/room-layouts.json` (gitignored), imported in Settings and stored under its own `localStorage` key
+`local/room-layouts.json` (gitignored), loaded at start and stored under its own `localStorage` key
 `ssz-room-layouts`, apart from the save (schema in the README). It is never part of an export and never in the repo.
 
 - `fetchLocalRoomLayouts` (room-layouts.js) tries `local/room-layouts.json` next to the app at every start and, if
   served, validates it and replaces the stored copy; a 404 (GitHub Pages) is silently ignored, an invalid file is an error.
 - Per challenge number: `fixedTerrain` and `enemyAreas` rectangles, `markers` (objectives and drop points; a
-  `diameter` makes one a circle), one `crewZone` rectangle and an optional `note`, in inches on the upright board
-  from the top-left corner, in the orientation the book prints (30" × 22"), so the sketch can be compared with the page.
-  Layout file `schemaVersion` 2; save `schemaVersion` 5 drops terrain rolled on the old upright board. Validated on import (known challenge, inside the board); a bad file is
+  `diameter` makes one a circle), one `crewZone` rectangle and an optional `note`, in inches from the top-left corner,
+  in the orientation the book prints (30" × 22"), so the sketch can be compared with the page.
+  Layout file `schemaVersion` 2. Validated on import (known challenge, inside the board); a bad file is
   rejected and the old layouts stay; a stored file that stops validating shows an error instead of vanishing.
 - The sketch imitates the printed map: grey/black/hatched room terrain (`look`), teal crew zone, pink enemy areas
   with the number of models in each (`perCrew` split over `areas`, one crew), black objective circles; the random
@@ -235,5 +242,40 @@ Each step is usable on its own; 1–4 is the MVP.
 
 ## 9. Open questions
 
-- Co-op: is one roster per device enough?
 - Should exits roll in-app by default, or always ask for the physical dice result?
+
+## 10. Playthroughs and parties of several crews
+
+- **Playthroughs.** Separate campaigns kept side by side and named by the owner (header picker). Everything about one,
+  crews and their stats included, lives inside it, so nothing crosses between playthroughs. Switching, adding, renaming
+  and deleting are in `js/state.js` (`switchPlaythrough`, `addPlaythrough`, ...); export saves all of them, importing
+  a backup replaces everything, importing a single old campaign adds it as a new playthrough.
+- **Parties.** A run holds `crews` (1 to `MAX_CREWS` = 4) that always travel together: one route, one cleared list, one
+  log. More crews can join later (`addCrew`); one can leave (`removeCrew`, remembered in `pastCrews`); retiring retires
+  the whole party (`retireParty`). Save `schemaVersion` 6 turned the single `run.crew` into `run.crews`.
+- Each crew has its own roster, XP, injuries and secondary agenda. Agenda progress is counted per agenda key at the
+  station, so two active crews cannot chase the same agenda (refused when adding).
+- The post-game form lists every crew's members; each crew with an advancing agenda gets its own checkbox.
+- The book's "per crew" enemy counts are multiplied by the crews taking part (those with someone able to play the
+  room). With two or more crews taking part the co-op stat bar of the Warship and CONTROL is the one shown in full.
+
+## 11. Save sync (optional)
+
+Saves can mirror to the owner's own Supabase project (`js/cloud-sync.js`, setup in `docs/SYNC.md`, database in
+`docs/supabase-setup.sql`). This is the one allowed exception to "nothing leaves the browser" (CLAUDE.md rule 4).
+
+- **Locked down:** sign-ups off; sign-in is email + password, then a TOTP code (Supabase MFA, plain `fetch`, no
+  library). The `playthroughs` table's row-level security only lets the owner's `aal2` session read or write its
+  rows, so a password alone or the public anon key gets nothing. The client also refuses to sync before the TOTP step.
+- **Model:** the browser copy stays the main one. One row per playthrough (`owner, id, name, state jsonb, updated_at ms,
+  deleted`). Each playthrough carries `updatedAt`, moved only by saves that really change it (so tab clicks never
+  upload); the newest change wins. A deletion leaves a `deleted` marker that other devices honour.
+- **When:** pull + merge + upload on start, when the tab becomes visible again (at most every 20 s), and ~1.5 s after a
+  change. Cloud rows are untrusted: each is validated like an imported save and a bad one is skipped and reported.
+  An untouched starter "Playthrough 1" neither uploads nor outlives playthroughs that arrive from the cloud.
+- **Failure:** offline or server errors leave the local save untouched and show "Sync failed" in Settings → Sync.
+- Not built: sharing one playthrough between accounts, conflict merging inside a playthrough (last change wins).
+- Tests use a local mock of the endpoints (never the live project).
+- The first-time authenticator QR is drawn in the app (`js/qr.js`: a dependency-free QR encoder, byte mode, level M,
+  versions 1-10) from the `otpauth://` link Supabase returns; the secret and the link are shown as text too. Verified by
+  decoding the generated codes with the browser's `BarcodeDetector`.

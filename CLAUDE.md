@@ -12,7 +12,8 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
 
 ## Stack
 
-- Plain HTML + CSS + vanilla JS (ES modules). No framework, no build step, no dependencies, no backend.
+- Plain HTML + CSS + vanilla JS (ES modules). No framework, no build step, no dependencies, no backend of our own
+  (the one hosted service is the owner's Supabase project, see rule 4).
 - State lives in `localStorage`; JSON export/import is the only backup/sync.
 - Hosted on GitHub Pages straight from the repo root of `main`. All paths must be relative.
 - Run locally: `python3 -m http.server 8000` in the repo root, open `http://localhost:8000`.
@@ -22,7 +23,7 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
 1. **No rulebook content in the repo.** The repo is public and the rulebook is a paid, copyrighted,
    watermarked PDF. Never commit the PDF, extracted text, flavour text, hidden-information text,
    maps, or full rule/ability wording. Room footprints (fixed terrain, enemy spots, crew zone) are map content:
-   they live only in the owner's gitignored `local/room-layouts.json`, imported into the browser's localStorage
+   they live only in the owner's gitignored `local/room-layouts.json`, loaded into the browser's localStorage
    (`js/room-layouts.js`). The same file holds each room's short briefing (enemy names and counts, hazards,
    deadline, goal) and the book's own room text (lore, rules, enemy stat bars), extracted by
    `local/extract-room-texts.py`. Never write any of it into tracked files, commits, chat, or examples built from real data. Allowed: challenge numbers and names, exit graph, page
@@ -35,7 +36,12 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
    Room layouts, briefings and the book's room text are spoilers too: the UI shows them only for the room the crew
    has reached, and warns about spoilers before a room is entered (at the exits and on the set-out bar).
 3. **No git writes** (`add` / `commit` / `push`) — tell the owner when one is needed.
-4. **Nothing leaves the browser.** No analytics, CDNs, web fonts, or external requests.
+4. **Nothing leaves the browser except the owner's own save sync.** No analytics, CDNs, web fonts, or other external
+   requests. The one exception (decided by the owner): when signed in, saves sync to the owner's own Supabase project
+   (`js/cloud-sync.js`, plain `fetch`, no library). It needs a password and a TOTP code, sign-ups are off, and row-level
+   security in the database only lets an `aal2` session of the owner touch the rows (`docs/supabase-setup.sql`).
+   Signed out, nothing is sent anywhere. Only game saves go there: never rulebook content or room layouts. Tests
+   never talk to the live project (use the local mock, or a throwaway project).
 
 ## Conventions
 
@@ -43,7 +49,7 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
 - Campaign facts live in `js/data.js` only — never hard-code a challenge number or threshold elsewhere.
 - Two layers of state, never mixed: **station** (persists across crews: completed agendas parts, legacy flags)
   and **run** (one crew's campaign). See `docs/ANALYSIS.md` § Data model.
-- Saved state carries a `schemaVersion`; changing the shape means writing a migration, not breaking old saves.
+- Saved state carries a `schemaVersion` (the store and each playthrough's state); changing the shape means writing a migration, not breaking old saves.
 - The look is fixed and must not depend on a device's dark/light setting: `color-scheme: only dark` (meta and CSS), explicit
   backgrounds on the map and tables, no `prefers-color-scheme` rules.
 - Mobile first — it is used at the gaming table on a phone or tablet. Big tap targets, works offline once loaded.

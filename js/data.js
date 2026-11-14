@@ -89,7 +89,7 @@ export const AGENDAS = {
 };
 
 // d12 needed to keep the initiative for the 2nd, 3rd and every later activation in a turn (p. 14)
-export const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
+const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
 
 // Short reminders in this app's own words, not the rulebook's; the pages have the full rules and examples.
 export const DICE_HELP = [

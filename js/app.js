@@ -7,8 +7,9 @@ import {
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
+import * as cloud from './cloud-sync.js';
 import * as store from './state.js';
-import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, parseRoomLayouts, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
+import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
 import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
@@ -27,6 +28,19 @@ const ui = {
   isTerrainJustRolled: false,
   // whether the lore at the top of the room card is open; starts open in every room, remembered while you stay
   isLoreOpen: true,
+  // the playthrough picker in the header: open or not, and the two name fields in it
+  isPlaythroughMenuOpen: false,
+  // the Crew tab shows the form for another crew joining the party
+  isAddingCrew: false,
+  // sign-in to the save sync (Settings): which step, what was typed (never saved), the QR of a first-time enrolment
+  syncStep: 'signin',
+  syncEmail: '',
+  syncPassword: '',
+  syncCode: '',
+  syncEnrollment: null,
+  isSyncBusy: false,
+  newPlaythroughName: '',
+  renamePlaythroughName: '',
   postGame: null,
   exitRoll: '',
   mapSelected: null,
@@ -101,23 +115,24 @@ function renderJourney() {
       <button class="primary" data-action="showTab" data-tab="crew">Create a crew</button></section>${renderStationMap()}`;
   }
   if (run.ended) {
-    return `<section class="card"><h2>${run.ended === 'victory' ? 'Journey complete' : 'Crew lost'}</h2>
-      <p>${escapeHtml(run.crew.name)} — ${run.cleared.length} challenge(s) cleared, ended in Challenge ${challengeTitle(run.currentChallenge)}.</p>
+    return `<section class="card"><h2>${run.ended === 'victory' ? 'Journey complete' : run.crews.length > 1 ? 'Party lost' : 'Crew lost'}</h2>
+      <p>${escapeHtml(partyName(run))} — ${run.cleared.length} challenge(s) cleared, ended in Challenge ${challengeTitle(run.currentChallenge)}.</p>
       ${renderReminders(CHALLENGES[run.currentChallenge].reminders ?? [])}
-      <p>Read back the Log, then retire this crew to send a new one in. The station remembers some things.</p>
-      ${confirmButton('retireCrew', 'Retire crew')}</section>${renderStationMap()}`;
+      <p>Read back the Log, then retire the party to send a new one in. The station remembers some things.</p>
+      ${confirmButton('retireParty', 'Retire the party')}</section>${renderStationMap()}`;
   }
 
   const number = run.currentChallenge;
   const challenge = CHALLENGES[number];
   const isCleared = store.isCurrentChallengeCleared(run);
-  const benched = run.crew.members.filter((member) => member.status === 'recovering');
-  const progress = store.agendaProgress(state);
+  const benched = store.allMembers(run).filter((member) => member.status === 'recovering');
   // page pointers stay up after the room is cleared (some apply only then); the rest matter only during play
   const reminders = [...(challenge.reminders ?? [])];
   if (!isCleared && challenge.turnLimit) reminders.unshift(`Time limit: end of turn ${challenge.turnLimit}.`);
-  if (!isCleared && store.canAdvanceAgendaInCurrentChallenge(state)) {
-    reminders.push(`${AGENDAS[progress.agendaKey].name} agenda can advance here — see "Secondary Agenda" in this challenge.`);
+  for (const crew of run.crews) {
+    if (isCleared || !store.canAdvanceAgendaInCurrentChallenge(state, crew)) continue;
+    const { agendaKey } = store.agendaProgress(state, crew);
+    reminders.push(`${run.crews.length > 1 ? `${crew.name}: ` : ''}${AGENDAS[agendaKey].name} agenda can advance here — see "Secondary Agenda" in this challenge.`);
   }
   if (!isCleared && state.station.legacyCount > 0) {
     reminders.push(`Station legacy ×${state.station.legacyCount}: ${LEGACY_PAGE_REFERENCE} applies to crews that set out after it was earned.`);
@@ -139,17 +154,25 @@ function renderJourney() {
       ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="sticky-action"><button class="primary" data-action="openPostGame">Challenge over →</button>
         <button data-action="reopenRoomSetup">← Set-up</button></div>`)}
     </section>
-    ${!isCleared && ui.postGame ? renderPostGame(challenge, progress) : ''}
+    ${!isCleared && ui.postGame ? renderPostGame(challenge) : ''}
     ${renderStationMap()}`;
 }
 
+// "Crew A & Crew B": what the party is called
+const partyName = (run) => run.crews.map((crew) => crew.name).join(' & ');
+
 function activeCrewModelCount() {
-  return state.run.crew.members.filter((member) => member.status === 'active').length;
+  return store.allMembers(state.run).filter((member) => member.status === 'active').length;
 }
 
-// the app tracks one crew, so "per crew" is the number itself; areas share it evenly, the first ones taking the odd models
+// the book's "per crew" counts crews that take part: those with someone able to play this room
+function participatingCrewCount() {
+  return state.run.crews.filter((crew) => crew.members.some((member) => member.status === 'active')).length;
+}
+
+// "per crew" times the crews taking part; areas share it evenly, the first ones taking the odd models
 function enemyShares(enemy) {
-  const total = enemy.perCrew;
+  const total = enemy.perCrew * participatingCrewCount();
   return (enemy.areas ?? []).map((area, index) => ({
     area, count: Math.floor(total / enemy.areas.length) + (index < total % enemy.areas.length ? 1 : 0) }));
 }
@@ -166,7 +189,7 @@ function enemyCaptionsByArea(roomLayout) {
 
 function renderEnemyLine(enemy) {
   const where = enemy.areas ? enemyShares(enemy).map(({ area, count }) => `${area}: ${count}`).join(' · ') : enemy.where;
-  const total = enemy.perCrew ? `${enemy.perCrew}× ` : '';
+  const total = enemy.perCrew ? `${enemy.perCrew * participatingCrewCount()}× ` : '';
   return `<li><b>${total}${escapeHtml(enemy.name)}</b> — ${escapeHtml(where)}${enemy.hidden ? ' <span class="chip warn">hidden</span>' : ''}
     ${enemy.when ? `<br><i>${escapeHtml(enemy.when)}</i>` : ''}${enemy.hidden && enemy.areas ? '<br><i>placed once revealed</i>' : ''}</li>`;
 }
@@ -175,7 +198,7 @@ function renderEnemyLine(enemy) {
 function renderRoomSummary(roomLayout) {
   const crewLine = roomLayoutLines(roomLayout).find((line) => line.group.startsWith('Your crew'));
   const crewHtml = crewLine
-    ? `<b>${activeCrewModelCount()} models</b> set up anywhere inside the start zone, ${escapeHtml(crewLine.text.replace('Zone · ', ''))} (${crewLine.where}).`
+    ? `<b>${activeCrewModelCount()} models</b>${participatingCrewCount() > 1 ? ` (${participatingCrewCount()} crews)` : ''} set up anywhere inside the start zone, ${escapeHtml(crewLine.text.replace('Zone · ', ''))} (${crewLine.where}).`
     : escapeHtml(roomLayout.crewNote ?? 'No starting zone is drawn on this map.');
   const hasEnemies = (roomLayout.enemies ?? []).length > 0;
   const hasSetUpInfo = Boolean(crewLine || roomLayout.crewNote || hasEnemies || roomLayout.enemyNote);
@@ -198,11 +221,17 @@ function renderBookText(text) {
 }
 
 // one enemy stat bar per row, as printed (Lf Mv Co Re In, and armor when the room gives it)
+// some enemies have a solo and a co-op stat bar: with two or more crews taking part the co-op one is yours
+function isStatBarForOtherPartySize(name) {
+  const isCoop = participatingCrewCount() >= 2;
+  return (name.includes('(solo play)') && isCoop) || (name.includes('(co-op play)') && !isCoop);
+}
+
 function renderEnemyStats(stats) {
   if (!stats?.length) return '';
   return `<h4 class="plain-heading">Enemy stats</h4><div class="stats-wrap"><table class="enemy-stats">
     <thead><tr><th></th><th>Lf</th><th>Mv</th><th>Co</th><th>Re</th><th>In</th><th>Armor</th></tr></thead>
-    <tbody>${stats.map((stat) => `<tr><th scope="row">${escapeHtml(stat.name)}</th><td>${stat.lf}</td><td>${stat.mv}</td><td>${stat.co}</td><td>${stat.re}</td><td>${stat.in}</td>
+    <tbody>${stats.map((stat) => `<tr class="${isStatBarForOtherPartySize(stat.name) ? 'not-yours' : ''}"><th scope="row">${escapeHtml(stat.name)}</th><td>${stat.lf}</td><td>${stat.mv}</td><td>${stat.co}</td><td>${stat.re}</td><td>${stat.in}</td>
       <td>${stat.armor ? escapeHtml(stat.armor) : '–'}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
@@ -236,7 +265,7 @@ function renderLore(roomLayout) {
 }
 
 function renderRoomInfo(roomLayout) {
-  if (!roomLayout) return '<p class="hint">No room layouts loaded. Run the app from the project folder, or import the file in Settings.</p>';
+  if (!roomLayout) return '<p class="hint">No room layouts loaded: they come from <code>local/room-layouts.json</code> when the app is served from the project folder.</p>';
   return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomRules(roomLayout)}`;
 }
 
@@ -341,14 +370,11 @@ function renderExits(challenge) {
       `<button data-action="takeExit" data-to="${number}" data-label="Backtracked">${challengeTitle(number)}</button>`)).join('')}</div>` : ''}`;
 }
 
-function renderPostGame(challenge, progress) {
+function renderPostGame(challenge) {
   const draft = ui.postGame;
-  const participants = state.run.crew.members.filter((member) => member.status === 'active');
-  const canAdvanceAgenda = store.canAdvanceAgendaInCurrentChallenge(state);
-  const willCompleteAgenda = canAdvanceAgenda && progress.found + 1 >= progress.partsNeeded;
-
+  const run = state.run;
   const oneStatUpRange = injuryRollRangeLabel('oneStatUp');
-  const memberRows = participants.map((member) => {
+  const memberRow = (member) => {
     const downed = draft.downed[member.id];
     const memberId = escapeHtml(member.id);
     const outcome = downed ? injuryOutcomeForRoll(Number(downed.roll)) : null;
@@ -363,17 +389,27 @@ function renderPostGame(challenge, progress) {
         <select data-bind-ui="postGame.downed.${memberId}.stat" title="Stat to raise on a roll of ${oneStatUpRange}">${options(STAT_KEYS.map((stat) => [stat, `+${STAT_LABELS[stat]} on ${oneStatUpRange}`]), downed.stat)}</select>
       </div><p class="outcome" id="outcome-${memberId}">${escapeHtml(outcome?.label ?? '')}</p>` : ''}
     </div>`;
+  };
+  const crewsHtml = run.crews.map((crew) => {
+    const participants = crew.members.filter((member) => member.status === 'active');
+    return `${run.crews.length > 1 ? `<h4 class="plain-heading">${escapeHtml(crew.name)}</h4>` : ''}${participants.map(memberRow).join('') || '<p class="hint">Nobody from this crew took part.</p>'}`;
+  }).join('');
+  const agendaHtml = run.crews.map((crew) => {
+    if (!store.canAdvanceAgendaInCurrentChallenge(state, crew)) return '';
+    const progress = store.agendaProgress(state, crew);
+    const willComplete = progress.found + 1 >= progress.partsNeeded;
+    return `<h3>2 · ${run.crews.length > 1 ? `${escapeHtml(crew.name)}: ` : ''}${AGENDAS[progress.agendaKey].name} agenda (${progress.found}/${progress.partsNeeded})</h3>
+      <p class="hint">Roll a d12: on ${AGENDA_ROLL_TARGET}+ follow the Secondary Agenda section of this challenge.</p>
+      <label><input type="checkbox" data-bind-ui="postGame.agendaPartFoundByCrew.${escapeHtml(crew.id)}"${draft.agendaPartFoundByCrew[crew.id] ? ' checked' : ''}> We secured what we came for</label>
+      ${willComplete ? `<p class="hint">If that completes it: ${escapeHtml(AGENDAS[progress.agendaKey].onCompletion)}</p>` : ''}`;
   }).join('');
 
   return `<section class="card">
     <h2>After the challenge</h2>
     <h3>1 · Injuries &amp; death (p. 40)</h3>
     <p class="hint">Tick everyone who was put Out of Action and needs a roll. Survivors get +${XP_PER_SURVIVED_CHALLENGE} XP (commander +${XP_PER_SURVIVED_CHALLENGE + COMMANDER_BONUS_XP_PER_CHALLENGE}) automatically.</p>
-    ${memberRows}
-    ${canAdvanceAgenda ? `<h3>2 · ${AGENDAS[progress.agendaKey].name} agenda (${progress.found}/${progress.partsNeeded})</h3>
-      <p class="hint">Roll a d12: on ${AGENDA_ROLL_TARGET}+ follow the Secondary Agenda section of this challenge.</p>
-      <label><input type="checkbox" data-bind-ui="postGame.agendaPartFound"${draft.agendaPartFound ? ' checked' : ''}> We secured what we came for</label>
-      ${willCompleteAgenda ? `<p class="hint">If that completes it: ${escapeHtml(AGENDAS[progress.agendaKey].onCompletion)}</p>` : ''}` : ''}
+    ${crewsHtml}
+    ${agendaHtml}
     ${challenge.canEarnLegacy ? `<h3>Rewards</h3>
       <label><input type="checkbox" data-bind-ui="postGame.legacyEarned"${draft.legacyEarned ? ' checked' : ''}> The Rewards section sent us to ${LEGACY_PAGE_REFERENCE}</label>` : ''}
     <h3>Captain's note</h3>
@@ -431,18 +467,30 @@ function renderSetOutBar() {
 }
 
 function renderCrew() {
-  if (!state.run) return renderNewCrewForm();
-  const { crew } = state.run;
-  const progress = store.agendaProgress(state);
-  return `${renderSetOutBar()}<section class="card">
-      <input class="title-input" data-bind="run.crew.name" value="${escapeHtml(crew.name)}" aria-label="Crew name">
+  if (!state.run) return renderNewCrewForm({ isFirstCrew: true });
+  if (ui.isAddingCrew) return renderNewCrewForm({ isFirstCrew: false });
+  const run = state.run;
+  const canAddCrew = !run.ended && run.crews.length < store.MAX_CREWS;
+  return `${renderSetOutBar()}${run.crews.map(renderCrewGroup).join('')}
+    ${canAddCrew ? `<button data-action="startAddingCrew">+ Add another crew to the party (${run.crews.length}/${store.MAX_CREWS})</button>` : ''}
+    ${renderSetOutBar()}`;
+}
+
+// one crew: its header card, its members, its add button. Crews have a coloured rule so they are told apart at a glance.
+function renderCrewGroup(crew, crewIndex) {
+  const run = state.run;
+  const progress = store.agendaProgress(state, crew);
+  return `<div class="crew-group crew-${crewIndex % store.MAX_CREWS}">
+    <section class="card">
+      <input class="title-input" data-bind="run.crews.${crewIndex}.name" value="${escapeHtml(crew.name)}" aria-label="Crew name">
       <p class="hint">${crew.size}-person crew · ${escapeHtml(crew.shipType)} ship · ${escapeHtml(crew.edge)}
       ${progress ? ` · ${AGENDAS[progress.agendaKey].name} agenda ${progress.found}/${progress.partsNeeded}` : ''}</p>
       <p class="hint">Starting gear (p. 36): one weapon each, plus ${STARTING_OTHER_EQUIPMENT + SHIP_TYPES[crew.shipType].extraStartingEquipment} other pieces for the whole crew. Commander's bonus piece: p. 32.</p>
+      ${run.crews.length > 1 ? confirmButton('removeCrew', 'Remove this crew from the party', `data-crew-id="${escapeHtml(crew.id)}"`) : ''}
     </section>
-    ${crew.members.map(renderMember).join('')}
-    <button data-action="addMember">+ Add member</button>
-    ${renderSetOutBar()}`;
+    ${crew.members.map((member, index) => renderMember(member, index, crewIndex, crew)).join('')}
+    <button data-action="addMember" data-crew="${crewIndex}">+ Add member to ${escapeHtml(crew.name)}</button>
+  </div>`;
 }
 
 function stepper(label, path, value, action = 'step') {
@@ -467,13 +515,13 @@ function equipmentPickerOptions(shipType) {
     }</optgroup>`)).join('');
 }
 
-function renderMember(member, index) {
-  const path = `run.crew.members.${index}`;
+function renderMember(member, index, crewIndex, crew) {
+  const path = `run.crews.${crewIndex}.members.${index}`;
   const advancement = store.pendingAdvancement(member);
   const advancementHtml = advancement ? `<div class="advancement"><b>Advancement at ${advancement.xp} XP</b>
     <div class="row wrap">${advancement.statOptions
-      ? advancement.statOptions.map((stat) => `<button data-action="takeAdvancement" data-index="${index}" data-stat="${stat}">+1 ${STAT_LABELS[stat]}</button>`).join('')
-      : `<button data-action="takeAdvancement" data-index="${index}">Gain ${escapeHtml(advancement.ability)}</button>`}</div></div>` : '';
+      ? advancement.statOptions.map((stat) => `<button data-action="takeAdvancement" data-crew="${crewIndex}" data-index="${index}" data-stat="${stat}">+1 ${STAT_LABELS[stat]}</button>`).join('')
+      : `<button data-action="takeAdvancement" data-crew="${crewIndex}" data-index="${index}">Gain ${escapeHtml(advancement.ability)}</button>`}</div></div>` : '';
   return `<section class="card member ${member.status}">
     <div class="row">
       <input class="grow name-input" data-bind="${path}.name" value="${escapeHtml(member.name)}" aria-label="Name">
@@ -489,8 +537,8 @@ function renderMember(member, index) {
     <textarea rows="2" placeholder="Special abilities" data-bind="${path}.abilities">${escapeHtml(member.abilities)}</textarea>
     ${appendPicker(`${path}.abilities`, '+ Add ability…', abilityPickerOptions())}
     <textarea rows="2" placeholder="Equipment" data-bind="${path}.equipment">${escapeHtml(member.equipment)}</textarea>
-    ${appendPicker(`${path}.equipment`, '+ Add equipment…', equipmentPickerOptions(state.run.crew.shipType))}
-    ${member.isCommander ? '' : confirmButton('removeMember', 'Remove', `data-index="${index}"`)}
+    ${appendPicker(`${path}.equipment`, '+ Add equipment…', equipmentPickerOptions(crew.shipType))}
+    ${member.isCommander ? '' : confirmButton('removeMember', 'Remove', `data-crew="${crewIndex}" data-index="${index}"`)}
   </section>`;
 }
 
@@ -500,7 +548,7 @@ function newCrewMemberTypes(draft) {
   return draft.memberTypes.slice(0, draft.size).map((type) => (availableTypes.includes(type) ? type : availableTypes[0]));
 }
 
-function renderNewCrewForm() {
+function renderNewCrewForm({ isFirstCrew }) {
   const draft = ui.newCrew;
   const ship = SHIP_TYPES[draft.shipType];
   const crewTypeOptions = ship.crewTypes.map((type) => [type, CREW_TYPES[type].isAdvanced ? `${type} (advanced)` : type]);
@@ -513,8 +561,8 @@ function renderNewCrewForm() {
   const pointsLeft = COMMANDER_FREE_STAT_POINTS - store.commanderPointsSpent(draft.commanderPoints);
   const commanderStat = (stat) => BASE_STATS_BY_CREW_SIZE[draft.size][stat] + (ship.commanderBonus[stat] ?? 0) + draft.commanderPoints[stat];
   return `<section class="card form">
-    <h2>New crew</h2>
-    <p class="hint">Follow p. 24–39 of the rulebook. The app fills in stats and abilities; pick equipment on the roster afterwards.</p>
+    <h2>${isFirstCrew ? 'New crew' : 'Add a crew to the party'}</h2>
+    <p class="hint">Follow p. 24–39 of the rulebook. The app fills in stats and abilities; pick equipment on the roster afterwards.${isFirstCrew ? '' : ' The new crew travels with the others from the room you are in. Each crew needs its own secondary agenda.'}</p>
     <label>Crew name<input data-bind-ui="newCrew.name" value="${escapeHtml(draft.name)}"></label>
     <label>Crew size<select data-bind-ui="newCrew.size" data-rerender data-number>${options(Object.keys(BASE_STATS_BY_CREW_SIZE).map((size) => [size, `${size} + commander`]), draft.size)}</select></label>
     <label>Ship type<select data-bind-ui="newCrew.shipType" data-rerender>${options(Object.keys(SHIP_TYPES).map((type) => [type, type]), draft.shipType)}</select></label>
@@ -527,7 +575,8 @@ function renderNewCrewForm() {
     <h3>Crew</h3>
     <p class="hint">Who you may recruit, and how many of each: p. ${ship.page}. At most one advanced crew member.</p>
     ${memberSelects}
-    <button class="primary" data-action="createCrew">Enter the station</button>
+    <button class="primary" data-action="createCrew">${isFirstCrew ? 'Enter the station' : 'Join the party'}</button>
+    ${isFirstCrew ? '' : '<button data-action="cancelAddingCrew">Cancel</button>'}
   </section>`;
 }
 
@@ -536,7 +585,8 @@ function renderNewCrewForm() {
 function renderLog() {
   const run = state.run;
   const pastCrews = state.station.pastCrews;
-  const graveyard = `${run ? run.crew.members.filter((member) => member.status === 'dead').map((member) => `<li>${escapeHtml(member.name)} <small>${escapeHtml(member.type)}</small></li>`).join('') : ''}`;
+  const graveyard = run ? store.allMembers(run).filter((member) => member.status === 'dead')
+    .map((member) => `<li>${escapeHtml(member.name)} <small>${escapeHtml(member.type)}</small></li>`).join('') : '';
   const pastCrewsHtml = pastCrews.length ? `<section class="card"><h3>Previous crews</h3><ul class="plain">${pastCrews.map((crew) => (
     `<li><b>${escapeHtml(crew.name)}</b> — ${escapeHtml(crew.outcome)}, ${crew.challengesCleared} cleared, ended in Challenge ${crew.endedInChallenge}${crew.fallen.length ? `<br><small>Fallen: ${escapeHtml(crew.fallen.map((entry) => entry.name).join(', '))}</small>` : ''}</li>`)).join('')}</ul></section>` : '';
   if (!run) return `<section class="card"><h2>Captain's log</h2><p>No crew aboard.</p></section>${pastCrewsHtml}`;
@@ -599,26 +649,85 @@ function obstaclesForRandomTerrainInCurrentRoom() {
   return roomLayout ? obstaclesForRandomTerrain(roomLayout) : [];
 }
 
+function syncStatusText(sync) {
+  if (sync.phase === 'syncing') return 'Syncing…';
+  if (sync.phase === 'error') return `Sync failed: ${sync.message}`;
+  if (sync.phase === 'synced') return `Synced ${new Date(sync.lastSyncedAt).toLocaleTimeString()}${sync.message ? ` · ${sync.message}` : ''}.`;
+  return 'Signed in. Changes upload a moment after you make them.';
+}
+
+// the save sync: off until js/config.js is filled in, then email + password, then a TOTP code
+function renderSyncCard() {
+  const sync = cloud.getSyncStatus();
+  const busy = ui.isSyncBusy ? ' disabled' : '';
+  const codeInput = `<label>6-digit code from your authenticator app<input inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-bind-ui="syncCode" value="${escapeHtml(ui.syncCode)}"></label>`;
+  let body;
+  if (!sync.isConfigured) {
+    body = '<p class="hint">Not set up. Your playthroughs live in this browser only. To keep a copy in your own free database too, follow docs/SYNC.md.</p>';
+  } else if (sync.isSignedIn) {
+    body = `<p class="hint">${escapeHtml(sync.email ?? '')} · ${escapeHtml(syncStatusText(sync))}</p>
+      <div class="row"><button data-async-action="syncNow"${busy}>Sync now</button><button data-async-action="syncSignOut"${busy}>Sign out</button></div>`;
+  } else if (ui.syncStep === 'enroll' && ui.syncEnrollment) {
+    body = `<p class="hint">First time: scan this with an authenticator app (or type the secret in), then enter the code it shows.</p>
+      ${ui.syncEnrollment.qrCode ? `<img class="totp-qr" alt="QR code for your authenticator app" src="${escapeHtml(ui.syncEnrollment.qrCode)}">`
+        : '<p class="hint">No QR image came back from the server: use the secret below, or the link, instead.</p>'}
+      <p class="hint">Secret: <code>${escapeHtml(ui.syncEnrollment.secret)}</code></p>
+      ${ui.syncEnrollment.uri ? `<p class="hint"><a href="${escapeHtml(ui.syncEnrollment.uri)}">Open in an authenticator app on this device</a> (on a phone)</p>` : ''}
+      ${codeInput}<div class="row"><button class="primary" data-async-action="syncVerify"${busy}>Verify</button><button data-async-action="syncSignOut"${busy}>Cancel</button></div>`;
+  } else if (ui.syncStep === 'code') {
+    body = `<p class="hint">Password accepted. Now the code from your authenticator app.</p>${codeInput}
+      <div class="row"><button class="primary" data-async-action="syncVerify"${busy}>Verify</button><button data-async-action="syncSignOut"${busy}>Cancel</button></div>`;
+  } else {
+    body = `<p class="hint">Sign in to keep a copy of all playthroughs in your own database. Without signing in, nothing leaves this browser.</p>
+      <label>Email<input type="email" autocomplete="username" data-bind-ui="syncEmail" value="${escapeHtml(ui.syncEmail)}"></label>
+      <label>Password<input type="password" autocomplete="current-password" data-bind-ui="syncPassword"></label>
+      <button class="primary" data-async-action="syncSignIn"${busy}>Sign in</button>`;
+  }
+  return `<section class="card form"><h2>Sync</h2>${body}</section>`;
+}
+
 function renderSettings() {
   return `<section class="card form"><h2>Save data</h2>
-      <p class="hint">Everything lives in this browser only. Export to back up or move to another device.</p>
+      <p class="hint">Everything lives in this browser only, all playthroughs together. Export to back up or move to another device. Importing a backup replaces everything; importing the save of a single campaign adds it as a new playthrough.</p>
       <button data-action="exportSave">Export save (JSON)</button>
       <label class="file">Import save<input type="file" accept="application/json,.json" data-import></label>
     </section>
-    <section class="card form"><h2>Room layouts</h2>
-      <p class="hint">${roomLayouts ? `Loaded for ${Object.keys(roomLayouts.rooms).length} rooms.` : 'None loaded.'}
-        Your private file with each room's terrain, enemies, objectives and crew zone. On your computer the app loads
-        <code>local/room-layouts.json</code> by itself; elsewhere (your phone, GitHub Pages) import it here. It stays in this browser only.</p>
-      <label class="file">Import room layouts<input type="file" accept="application/json,.json" data-import-layouts></label>
+    ${renderSyncCard()}
+    <section class="card form"><h2>Party</h2>
+      ${state.run ? `<p class="hint">Retiring archives the whole party (every crew) and lets a new one set out. Agenda progress and station legacy are kept.</p>${confirmButton('retireParty', 'Retire the party')}` : '<p class="hint">No crew aboard.</p>'}
     </section>
-    <section class="card form"><h2>Crew</h2>
-      ${state.run ? `<p class="hint">Retiring archives this crew and lets a new one set out. Agenda progress and station legacy are kept.</p>${confirmButton('retireCrew', 'Retire crew')}` : '<p class="hint">No crew aboard.</p>'}
-    </section>
-    <section class="card form"><h2>Danger</h2>${confirmButton('wipeEverything', 'Wipe everything')}</section>
+    <section class="card form"><h2>Danger</h2>${confirmButton('wipeEverything', 'Wipe everything (all playthroughs)')}</section>
     <section class="card"><p class="hint">Unofficial fan-made companion for Space Station Zero by Snarling Badger Studios. Contains no rules text — you need the rulebook to play.</p></section>`;
 }
 
 // ---------- shell ----------
+
+// everything on screen that belonged to the previous playthrough (or to the save that was just replaced)
+function resetViewForOtherPlaythrough() {
+  Object.assign(ui, { tab: 'journey', postGame: null, exitRoll: '', mapSelected: null, confirmKey: null, boardInfo: null, boardFocus: null,
+    isLoreOpen: true, isPlaythroughMenuOpen: false, isAddingCrew: false, newPlaythroughName: '' });
+  roomOfBoardView = null;
+}
+
+function renderPlaythroughMenu() {
+  const items = store.listPlaythroughs().map(({ id, name, isActive, state: playthroughState }) => {
+    const run = playthroughState.run;
+    const summary = run ? `${partyName(run)} · Challenge ${run.currentChallenge}${run.ended ? ' · ended' : ''}` : 'no crew yet';
+    return `<button class="exit playthrough-item ${isActive ? 'active' : ''}" data-action="switchPlaythrough" data-id="${escapeHtml(id)}">
+      <span>${escapeHtml(name)}${isActive ? ' · playing' : ''}</span><small>${escapeHtml(summary)}</small></button>`;
+  }).join('');
+  return `<section class="card form playthrough-menu"><h2>Playthroughs</h2>
+    <p class="hint">Each one is a separate campaign: its own crews, route, log, agenda progress and station legacy.</p>
+    <div class="stack">${items}</div>
+    <h3>Start a new one</h3>
+    <div class="row"><input class="grow" maxlength="40" placeholder="Name, e.g. Solo with Maya" aria-label="Name of the new playthrough" data-bind-ui="newPlaythroughName" value="${escapeHtml(ui.newPlaythroughName)}">
+      <button class="primary" data-action="addPlaythrough">Add</button></div>
+    <h3>The one you are playing</h3>
+    <div class="row"><input class="grow" maxlength="40" aria-label="Rename this playthrough" data-bind-ui="renamePlaythroughName" value="${escapeHtml(ui.renamePlaythroughName)}">
+      <button data-action="renamePlaythrough">Rename</button></div>
+    ${confirmButton('deletePlaythrough', 'Delete this playthrough')}
+    <button class="quiet" data-action="togglePlaythroughMenu">Close</button></section>`;
+}
 
 // the info line and the lit-up kind belong to one room's map: a new room starts clean (they could name things from the last room)
 let roomOfBoardView = null;
@@ -644,8 +753,11 @@ function render() {
   }
   resetBoardViewWhenRoomChanged();
   const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, settings: renderSettings };
-  appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div></header>
+  appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div>
+      <button class="playthrough-button" data-action="togglePlaythroughMenu" aria-expanded="${ui.isPlaythroughMenuOpen}" aria-label="Playthroughs">
+        <small>Playthrough</small>${escapeHtml(store.activePlaythroughName())} ▾</button></header>
     <main>
+      ${ui.isPlaythroughMenuOpen ? renderPlaythroughMenu() : ''}
       ${ui.errorMessage ? `<p class="error" role="alert">${escapeHtml(ui.errorMessage)}</p>` : ''}
       ${ui.noticeMessage ? `<p class="notice">${escapeHtml(ui.noticeMessage)}</p>` : ''}
       ${views[ui.tab]()}
@@ -668,19 +780,23 @@ const actions = {
     points[stat] = newValue;
   },
   createCrew: () => {
-    store.startNewCrew(state, { ...ui.newCrew, memberTypes: newCrewMemberTypes(ui.newCrew) });
-    ui.newCrew.commanderPoints = store.zeroStats();
-    ui.newCrew.memberNames = Array(8).fill('');
+    store.addCrew(state, { ...ui.newCrew, memberTypes: newCrewMemberTypes(ui.newCrew) });
+    // the next crew starts from a clean form
+    Object.assign(ui.newCrew, { name: '', commanderName: '', agenda: '', commanderPoints: store.zeroStats(), memberNames: Array(8).fill('') });
+    ui.isAddingCrew = false;
     ui.tab = 'crew';
   },
-  addMember: () => {
-    state.run.crew.members.push(store.createMember({
+  startAddingCrew: () => { ui.isAddingCrew = true; },
+  cancelAddingCrew: () => { ui.isAddingCrew = false; },
+  removeCrew: ({ crewId }) => { store.removeCrew(state, crewId); ui.postGame = null; },
+  addMember: ({ crew }) => {
+    state.run.crews[Number(crew)].members.push(store.createMember({
       name: 'New member', type: 'Soldier', isCommander: false, stats: store.zeroStats() }));
   },
-  removeMember: ({ index }) => { state.run.crew.members.splice(Number(index), 1); },
-  takeAdvancement: ({ index, stat }) => { store.takeAdvancement(state.run.crew.members[Number(index)], stat); },
+  removeMember: ({ crew, index }) => { state.run.crews[Number(crew)].members.splice(Number(index), 1); },
+  takeAdvancement: ({ crew, index, stat }) => { store.takeAdvancement(state.run.crews[Number(crew)].members[Number(index)], stat); },
 
-  openPostGame: () => { ui.postGame = { downed: {}, bonusXp: {}, agendaPartFound: false, legacyEarned: false, note: '' }; },
+  openPostGame: () => { ui.postGame = { downed: {}, bonusXp: {}, agendaPartFoundByCrew: {}, legacyEarned: false, note: '' }; },
   cancelPostGame: () => { ui.postGame = null; },
   toggleDowned: ({ id }) => {
     if (ui.postGame.downed[id]) delete ui.postGame.downed[id];
@@ -695,6 +811,29 @@ const actions = {
     ui.boardInfo = null;   // it may have described a piece that is gone now
   },
   showBoardInfo: ({ info }) => { ui.boardInfo = ui.boardInfo === info ? null : info; },
+  togglePlaythroughMenu: () => {
+    ui.isPlaythroughMenuOpen = !ui.isPlaythroughMenuOpen;
+    ui.renamePlaythroughName = store.activePlaythroughName();
+  },
+  switchPlaythrough: ({ id }) => {
+    state = store.switchPlaythrough(id);
+    resetViewForOtherPlaythrough();
+    ui.noticeMessage = `Now playing: ${store.activePlaythroughName()}.`;
+  },
+  addPlaythrough: () => {
+    state = store.addPlaythrough(ui.newPlaythroughName);
+    resetViewForOtherPlaythrough();
+    ui.noticeMessage = `Started "${store.activePlaythroughName()}": create its crew on the Crew tab.`;
+  },
+  renamePlaythrough: () => {
+    store.renameActivePlaythrough(ui.renamePlaythroughName);
+    ui.noticeMessage = 'Renamed.';
+  },
+  deletePlaythrough: () => {
+    state = store.deleteActivePlaythrough();
+    resetViewForOtherPlaythrough();
+    ui.noticeMessage = `Deleted. Now playing: ${store.activePlaythroughName()}.`;
+  },
   toggleBoardFocus: ({ kind }) => { ui.boardFocus = ui.boardFocus === kind ? null : kind; },
   beginChallenge: () => { state.run.roomSetup.isMissionStarted = true; },
   reopenRoomSetup: () => { state.run.roomSetup.isMissionStarted = false; },
@@ -718,15 +857,60 @@ const actions = {
   rollPool: () => { ui.dice.rolled = { faces: Array.from({ length: ui.dice.pool }, rollD12), target: ui.dice.target, needed: ui.dice.needed }; },
   toggleDiceHelp: () => { ui.dice.isHelpOpen = !ui.dice.isHelpOpen; },
 
-  exportSave: () => { downloadTextFile('ssz-captains-log.json', JSON.stringify(state, null, 2), 'application/json'); },
+  exportSave: () => { downloadTextFile('ssz-captains-log.json', store.exportSaveText(), 'application/json'); },
   downloadRawSave: () => { downloadTextFile('ssz-raw-save.txt', localStorage.getItem(store.STORAGE_KEY), 'text/plain'); },
-  retireCrew: () => { store.retireCrew(state); ui.postGame = null; ui.mapSelected = null; ui.tab = 'crew'; },
-  wipeEverything: () => { state = store.createEmptyState(); unreadableSaveMessage = null; ui.postGame = null; ui.tab = 'journey'; },
+  retireParty: () => { store.retireParty(state); ui.postGame = null; ui.mapSelected = null; ui.tab = 'crew'; ui.isAddingCrew = false; },
+  wipeEverything: () => { state = store.wipeEverything(); unreadableSaveMessage = null; resetViewForOtherPlaythrough(); },
 };
 
 // taps on the map and its legend only change how the map looks: update it in place, so nothing re-renders, the
 // animations keep running and the tapped item stays lit
 const MAP_ONLY_ACTIONS = new Set(['showBoardInfo', 'toggleBoardFocus']);
+
+// what a sync action does when the merge brought newer data from the cloud: use it
+function useSyncedData(merge) {
+  if (!merge?.changed) return;
+  if (merge.activeReplaced) {
+    state = store.activeState();
+    resetViewForOtherPlaythrough();
+  }
+  if (!isTypingInAField()) render();
+}
+
+// actions that talk to the sync server: they wait for it, so they cannot go through the plain `actions` table
+const asyncActions = {
+  syncSignIn: async () => {
+    const { next } = await cloud.signIn(ui.syncEmail, ui.syncPassword);
+    ui.syncPassword = '';
+    ui.syncStep = next;
+    if (next === 'enroll') ui.syncEnrollment = await cloud.startEnrollment();
+  },
+  syncVerify: async () => {
+    await cloud.verifyCode(ui.syncCode, ui.syncEnrollment?.factorId);
+    Object.assign(ui, { syncCode: '', syncStep: 'signin', syncEnrollment: null });
+    useSyncedData(await cloud.syncNow({ force: true }));
+  },
+  syncNow: async () => { useSyncedData(await cloud.syncNow({ force: true })); },
+  syncSignOut: async () => {
+    await cloud.signOut();
+    Object.assign(ui, { syncStep: 'signin', syncCode: '', syncPassword: '', syncEnrollment: null });
+  },
+};
+
+async function runAsyncAction(name) {
+  ui.errorMessage = null;
+  ui.noticeMessage = null;
+  ui.isSyncBusy = true;
+  render();
+  try {
+    await asyncActions[name]();
+  } catch (error) {
+    ui.errorMessage = error.message;
+  } finally {
+    ui.isSyncBusy = false;
+    render();
+  }
+}
 
 // measuring lines from the board edges to an item (the tapped one, or the one under the pointer); none for no item
 function showMeasurementsOf(item) {
@@ -751,6 +935,11 @@ function refreshBoardInteractions() {
 }
 
 function handleClick(event) {
+  const asyncButton = event.target.closest('[data-async-action]');
+  if (asyncButton) {
+    runAsyncAction(asyncButton.dataset.asyncAction);
+    return;
+  }
   const element = event.target.closest('[data-action]');
   if (!element) return;
   if (MAP_ONLY_ACTIONS.has(element.dataset.action)) {
@@ -769,7 +958,7 @@ function handleClick(event) {
   ui.confirmKey = null;
   try {
     actions[element.dataset.action](element.dataset);
-    if (!unreadableSaveMessage) store.saveState(state);
+    if (!unreadableSaveMessage) store.saveState();
   } catch (error) {
     ui.errorMessage = error.message;
   }
@@ -782,7 +971,7 @@ function applyInput(element) {
   if (element.dataset.appendTo && element.value) {
     const path = element.dataset.appendTo;
     setAtPath(state, path, [getAtPath(state, path), element.value].filter(Boolean).join('\n'));
-    store.saveState(state);
+    store.saveState();
     render();
     return;
   }
@@ -792,7 +981,7 @@ function applyInput(element) {
   if (statePath) {
     setAtPath(state, statePath, value);
     if (state.run) store.recordDeathLocations(state.run);
-    store.saveState(state);
+    store.saveState();
   } else {
     setAtPath(ui, uiPath, value);
   }
@@ -815,39 +1004,14 @@ function handleInput(event) {
   }
 }
 
-async function handleImportRoomLayouts(file) {
-  try {
-    const importedLayouts = parseRoomLayouts(await file.text());
-    saveRoomLayouts(importedLayouts);
-    roomLayouts = importedLayouts;
-    ui.noticeMessage = `Room layouts imported for ${Object.keys(importedLayouts.rooms).length} rooms.`;
-    // terrain rolled before the import ignored the room's own terrain: roll it again
-    if (state?.run && !state.run.roomSetup.isMissionStarted && state.run.roomSetup.terrain) {
-      state.run.roomSetup.terrain = null;
-      store.saveState(state);
-      ui.noticeMessage += ' The terrain rolled for this room was cleared: roll it again.';
-    }
-    ui.errorMessage = null;
-  } catch (error) {
-    ui.errorMessage = `Room layouts import failed, nothing was changed: ${error.message}`;
-  }
-  render();
-}
-
 async function handleImport(event) {
-  if ('importLayouts' in event.target.dataset) {
-    if (event.target.files[0]) await handleImportRoomLayouts(event.target.files[0]);
-    return;
-  }
   if (!('import' in event.target.dataset)) return;
   const file = event.target.files[0];
   if (!file) return;
   try {
-    const importedState = store.parseSavedState(await file.text());
-    store.saveState(importedState);
-    state = importedState;
-    ui.postGame = null;
-    ui.noticeMessage = 'Save imported.';
+    state = store.importSave(await file.text());
+    resetViewForOtherPlaythrough();
+    ui.noticeMessage = `Save imported. Playing: ${store.activePlaythroughName()}.`;
     ui.errorMessage = null;
   } catch (error) {
     ui.errorMessage = `Import failed, nothing was changed: ${error.message}`;
@@ -863,7 +1027,7 @@ try {
 try {
   roomLayouts = loadRoomLayouts();
 } catch (error) {
-  ui.errorMessage = `Stored room layouts are unreadable, import them again: ${error.message}`;
+  ui.errorMessage = `Stored room layouts are unreadable (they are loaded again from local/room-layouts.json when served from the project folder): ${error.message}`;
 }
 appElement.addEventListener('click', handleClick);
 // a <details> reports opening and closing with a `toggle` event that does not bubble, hence the capture
@@ -886,7 +1050,7 @@ appElement.addEventListener('mouseout', (event) => {
 appElement.addEventListener('input', handleInput);
 appElement.addEventListener('change', handleImport);
 
-// served from the project folder: pick up local/room-layouts.json by itself, no Settings import needed
+// served from the project folder: pick up local/room-layouts.json by itself
 // A re-render drops focus and swallows keystrokes, so it is skipped while a field is being edited (the layouts are
 // then used from the next render) and when the file is what is already loaded.
 const isTypingInAField = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
@@ -903,4 +1067,15 @@ fetchLocalRoomLayouts().then((localLayouts) => {
   ui.errorMessage = `local/room-layouts.json is not valid, nothing was loaded: ${error.message}`;
   if (!isTypingInAField()) render();
 });
+
+// save sync: when signed in, every real change uploads a moment later, and everything is pulled when the app opens and
+// whenever you come back to it. All of this does nothing when signed out or not set up.
+// (Not when the save could not be read: syncing must never overwrite what is still recoverable.)
+if (!unreadableSaveMessage) {
+  cloud.restoreSession();
+  store.onPlaythroughChange(() => cloud.schedulePush(useSyncedData));
+  cloud.onSyncStatusChange(() => { if (ui.tab === 'settings' && !isTypingInAField() && !ui.isSyncBusy) render(); });
+  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') useSyncedData(await cloud.syncNow()); });
+}
 render();
+if (!unreadableSaveMessage) cloud.syncNow({ force: true }).then(useSyncedData);

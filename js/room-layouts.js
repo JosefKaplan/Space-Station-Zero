@@ -1,12 +1,12 @@
 // Each room's own footprint on the board: fixed terrain, enemy starting areas, objective and drop-point markers,
 // the crew's starting zone, plus a short briefing.
 // This comes from the owner's private file local/room-layouts.json (gitignored: CLAUDE.md, hard rule 1), loaded by itself
-// where the app is served from the project folder, or imported in Settings, and kept in this browser's localStorage.
+// where the app is served from the project folder, and kept in this browser's localStorage.
 // All numbers are inches on the board as the book prints it (30" across, 22" deep), measured from its top-left corner.
 import { BOARD_HEIGHT_INCHES, BOARD_WIDTH_INCHES, CHALLENGES } from './data.js';
 
-export const ROOM_LAYOUTS_STORAGE_KEY = 'ssz-room-layouts';
-export const ROOM_LAYOUTS_SCHEMA_VERSION = 2;
+const ROOM_LAYOUTS_STORAGE_KEY = 'ssz-room-layouts';
+const ROOM_LAYOUTS_SCHEMA_VERSION = 2;
 
 function expect(isOk, whereInFile, problem) {
   if (!isOk) throw new Error(`${whereInFile}: ${problem}`);
@@ -71,7 +71,7 @@ function validateEnemy(enemy, whereInFile) {
   expect(enemy.hidden === undefined || typeof enemy.hidden === 'boolean', whereInFile, '"hidden" must be true or false');
 }
 
-export function parseRoomLayouts(fileText) {
+function parseRoomLayouts(fileText) {
   let layouts;
   try {
     layouts = JSON.parse(fileText);
@@ -132,11 +132,11 @@ export function loadRoomLayouts() {
   return storedText === null ? null : parseRoomLayouts(storedText);
 }
 
-export const ROOM_LAYOUTS_FILE_PATH = 'local/room-layouts.json';
+const ROOM_LAYOUTS_FILE_PATH = 'local/room-layouts.json';
 
 // The owner's file sits in the gitignored local/ folder, so it exists only where the app is served from the project
 // folder (python3 -m http.server). There it replaces the stored copy at every start; anywhere else (GitHub Pages) it
-// is simply not found and the stored copy, or the Settings import, is used. Returns the layouts, or null if not served.
+// is simply not found and the stored copy is used. Returns the layouts, or null if not served.
 export async function fetchLocalRoomLayouts() {
   let response;
   try {
