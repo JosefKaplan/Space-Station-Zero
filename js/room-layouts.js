@@ -152,9 +152,13 @@ async function fetchRoomLayoutsFile(path) {
   }
 }
 
-// the public footprints, with each room's private briefing and book text added when the private file is there
-export async function fetchRoomLayouts() {
-  const [publicLayouts, privateLayouts] = await Promise.all([fetchRoomLayoutsFile(PUBLIC_FOOTPRINTS_FILE_PATH), fetchRoomLayoutsFile(PRIVATE_ROOM_LAYOUTS_FILE_PATH)]);
+export const fetchPublicFootprints = () => fetchRoomLayoutsFile(PUBLIC_FOOTPRINTS_FILE_PATH);
+export const fetchPrivateRoomLayouts = () => fetchRoomLayoutsFile(PRIVATE_ROOM_LAYOUTS_FILE_PATH);
+// text that came from the private database instead of the file: same checks, an error names what was wrong
+export const checkedPrivateRoomLayouts = (layouts) => parseRoomLayouts(JSON.stringify(layouts));
+
+// the public footprints, with each room's private briefing and book text added when there is any
+export function mergeRoomLayouts(publicLayouts, privateLayouts) {
   if (!publicLayouts) return privateLayouts;
   if (!privateLayouts) return publicLayouts;
   const rooms = { ...publicLayouts.rooms };

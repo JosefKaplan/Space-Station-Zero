@@ -193,3 +193,23 @@ export function schedulePush(onDone = () => {}) {
   clearTimeout(pushTimer);
   pushTimer = setTimeout(async () => { onDone(await syncNow({ force: true })); }, PUSH_DELAY_MS);
 }
+
+// ---------- private files (the book's text for the owner's own devices) ----------
+
+const PRIVATE_FILES_PATH = '/rest/v1/private_files';
+
+// { 'room-layouts': {...}, 'crew-rules': {...} } into the owner's database (docs/supabase-setup.sql, table private_files)
+export async function uploadPrivateFiles(files) {
+  if (!isReadyToSync()) throw new Error('Sign in to the sync first.');
+  const token = await freshAccessToken();
+  const rows = Object.entries(files).map(([name, data]) => ({ owner: session.userId, name, data, updated_at: Date.now() }));
+  await request(`${PRIVATE_FILES_PATH}?on_conflict=owner,name`, { method: 'POST', token, body: rows, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+}
+
+// the same object back, or null when not signed in
+export async function downloadPrivateFiles() {
+  if (!isReadyToSync()) return null;
+  const token = await freshAccessToken();
+  const rows = await request(`${PRIVATE_FILES_PATH}?select=name,data`, { token });
+  return Object.fromEntries(rows.map((row) => [row.name, row.data]));
+}

@@ -70,8 +70,8 @@ Optionally, a private file adds each room's briefing and the book's own text. Ru
 (`python3 -m http.server 8000`), the app loads `local/room-layouts.json` by itself at every start and merges it over the
 footprints: enemies and where each group sets up, hazards, goal, deadline, the enemy stat table, and the lore and rules
 in folded sections. It is kept in your browser's storage afterwards and the repo never contains it (`local/` is
-gitignored). Served from anywhere else (GitHub Pages) there is no such file and the app shows the footprints only.
-Open the app on your phone through your computer's server (`http://<your computer's address>:8000`) to get the private part there too.
+gitignored). Served from anywhere else (GitHub Pages) there is no such file, so the app shows the footprints only until you sign in to the sync.
+To get the private part on your phone and on GitHub Pages, copy it to your own database with Settings → Sync → "Copy room texts to my database" and sign in on the other device ([`docs/SYNC.md`](docs/SYNC.md)); signing out removes it again.
 After changing `local/room-layouts.json`, run `python3 local/export-room-footprints.py` to refresh the public footprints
 (it copies only the geometry).
 
@@ -142,7 +142,7 @@ If the phone still shows the old version, reload the page.
 
 Saves are per browser and per address: a campaign started on `localhost` does not appear on the
 GitHub Pages address by itself. Either sign in to the sync (above) on both, or move it with **Settings → Export save** and
-**Import save**. The sync works from any address, Pages included; the private briefings and book text below do not (they are local only).
+**Import save**. The sync works from any address, Pages included; the private briefings and book text below come to the other address only after you sign in (see "Room layouts").
 
 ## Docs
 

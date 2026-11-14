@@ -8,9 +8,12 @@ import {
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as cloud from './cloud-sync.js';
-import { fetchLocalCrewRules, loadCrewRules, ruleNotesMentionedIn, saveCrewRules } from './crew-rules.js';
+import { checkedCrewRules, fetchLocalCrewRules, forgetCrewRules, loadCrewRules, ruleNotesMentionedIn, saveCrewRules } from './crew-rules.js';
 import * as store from './state.js';
-import { fetchRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
+import {
+  checkedPrivateRoomLayouts, fetchPrivateRoomLayouts, fetchPublicFootprints, loadRoomLayouts, mergeRoomLayouts, obstaclesForRandomTerrain,
+  roomLayoutFor, saveRoomLayouts,
+} from './room-layouts.js';
 import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
@@ -19,6 +22,9 @@ const appElement = document.getElementById('app');
 
 let state = null;
 let roomLayouts = null;
+let publicFootprints = null;
+let privateRoomLayouts = null;   // the briefings and book text: from the local file, or from the owner's private database
+let hasLocalPrivateFiles = false;   // the project folder serves the private files: they win over the database
 let crewRules = null;   // what abilities, equipment and edges do: the book's wording, only from the private local file
 let unreadableSaveMessage = null;
 const ui = {
@@ -705,7 +711,9 @@ function renderSyncCard() {
   } else if (sync.isSignedIn) {
     body = `<p class="hint">${escapeHtml(sync.email ?? '')} · ${escapeHtml(syncStatusText(sync))}</p>
       <p class="hint">Automatic: changes upload a moment after you make them, and other devices' changes arrive every minute and when you come back to the app.</p>
-      <div class="row"><button data-async-action="syncNow"${busy}>Sync now</button><button data-async-action="syncSignOut"${busy}>Sign out</button></div>`;
+      <div class="row"><button data-async-action="syncNow"${busy}>Sync now</button><button data-async-action="syncSignOut"${busy}>Sign out</button></div>
+      ${hasLocalPrivateFiles ? `<p class="hint">The room texts and crew notes in <code>local/</code> are the book's text: they are not in the public site. Copy them to your private database to see them on the deployed app too (after signing in there).</p>
+      <button data-async-action="syncUploadPrivateFiles"${busy}>Copy room texts to my database</button>` : ''}`;
   } else if (ui.syncStep === 'enroll' && ui.syncEnrollment) {
     body = `<p class="hint">First time: scan this with an authenticator app (or type the secret in), then enter the code it shows.</p>
       ${ui.syncEnrollment.qrCode ? `<img class="totp-qr" alt="QR code for your authenticator app" src="${escapeHtml(ui.syncEnrollment.qrCode)}">`
@@ -929,10 +937,22 @@ const asyncActions = {
     await cloud.verifyCode(ui.syncCode, ui.syncEnrollment?.factorId);
     Object.assign(ui, { syncCode: '', syncStep: 'signin', syncEnrollment: null });
     useSyncedData(await cloud.syncNow({ force: true }));
+    await pullPrivateFilesFromDatabase();
   },
-  syncNow: async () => { useSyncedData(await cloud.syncNow({ force: true })); },
+  syncNow: async () => {
+    useSyncedData(await cloud.syncNow({ force: true }));
+    await pullPrivateFilesFromDatabase();
+  },
+  // from the project folder: copy the private room texts and crew notes into the owner's database, for the other devices
+  syncUploadPrivateFiles: async () => {
+    const [roomLayoutsFile, crewRulesFile] = await Promise.all([fetchPrivateRoomLayouts(), fetchLocalCrewRules()]);
+    if (!roomLayoutsFile && !crewRulesFile) throw new Error('No private files found: open the app from the project folder (where local/ is) and try again.');
+    await cloud.uploadPrivateFiles({ ...(roomLayoutsFile ? { 'room-layouts': roomLayoutsFile } : {}), ...(crewRulesFile ? { 'crew-rules': crewRulesFile } : {}) });
+    ui.noticeMessage = 'Copied the room texts and crew notes to your database. Your other devices get them after signing in.';
+  },
   syncSignOut: async () => {
     await cloud.signOut();
+    forgetPrivateFilesFromDatabase();
     Object.assign(ui, { syncStep: 'signin', syncCode: '', syncPassword: '', syncEnrollment: null });
   },
 };
@@ -1096,14 +1116,32 @@ appElement.addEventListener('change', handleImport);
 // then used from the next render) and when the file is what is already loaded.
 const isTypingInAField = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-fetchRoomLayouts().then((fetchedLayouts) => {
-  if (!fetchedLayouts) return;
-  const isNewContent = JSON.stringify(fetchedLayouts) !== JSON.stringify(roomLayouts);
-  saveRoomLayouts(fetchedLayouts);
-  roomLayouts = fetchedLayouts;
-  if (!isNewContent && !ui.errorMessage) return;
-  ui.errorMessage = null;
-  if (!isTypingInAField()) render();
+function useRoomLayouts() {
+  const merged = mergeRoomLayouts(publicFootprints, privateRoomLayouts);
+  if (!merged) return;
+  const isNewContent = JSON.stringify(merged) !== JSON.stringify(roomLayouts);
+  saveRoomLayouts(merged);
+  roomLayouts = merged;
+  if ((isNewContent || ui.errorMessage) && !isTypingInAField()) {
+    ui.errorMessage = null;
+    render();
+  }
+}
+
+function useCrewRules(rules) {
+  const isNewContent = JSON.stringify(rules) !== JSON.stringify(crewRules);
+  saveCrewRules(rules);
+  crewRules = rules;
+  if (isNewContent && !isTypingInAField()) render();
+}
+
+Promise.all([fetchPublicFootprints(), fetchPrivateRoomLayouts()]).then(([footprints, privateLayouts]) => {
+  publicFootprints = footprints;
+  if (privateLayouts) {
+    privateRoomLayouts = privateLayouts;
+    hasLocalPrivateFiles = true;
+  }
+  useRoomLayouts();
 }).catch((error) => {
   ui.errorMessage = error.message;
   if (!isTypingInAField()) render();
@@ -1111,14 +1149,37 @@ fetchRoomLayouts().then((fetchedLayouts) => {
 
 fetchLocalCrewRules().then((localRules) => {
   if (!localRules) return;
-  const isNewContent = JSON.stringify(localRules) !== JSON.stringify(crewRules);
-  saveCrewRules(localRules);
-  crewRules = localRules;
-  if (isNewContent && !isTypingInAField()) render();
+  hasLocalPrivateFiles = true;
+  useCrewRules(localRules);
 }).catch((error) => {
   ui.errorMessage = `local/crew-rules.json is not valid, nothing was loaded: ${error.message}`;
   if (!isTypingInAField()) render();
 });
+
+// Signed in and not served from the project folder: the briefings and book text come from the owner's private database.
+// They never are in the public repo (CLAUDE.md rule 1).
+async function pullPrivateFilesFromDatabase() {
+  if (hasLocalPrivateFiles) return;
+  const files = await cloud.downloadPrivateFiles();
+  if (!files) return;
+  if (files['room-layouts']) {
+    privateRoomLayouts = checkedPrivateRoomLayouts(files['room-layouts']);
+    useRoomLayouts();
+  }
+  if (files['crew-rules']) useCrewRules(checkedCrewRules(files['crew-rules']));
+}
+
+// signed out on a device that got them from the database: they go, so a shared phone does not keep the book's text
+function forgetPrivateFilesFromDatabase() {
+  if (hasLocalPrivateFiles) return;
+  privateRoomLayouts = null;
+  crewRules = null;
+  forgetCrewRules();
+  if (publicFootprints) {
+    saveRoomLayouts(publicFootprints);
+    roomLayouts = publicFootprints;
+  }
+}
 
 // save sync: when signed in, every real change uploads a moment later, and everything is pulled when the app opens and
 // whenever you come back to it. All of this does nothing when signed out or not set up.
@@ -1136,4 +1197,4 @@ if (!unreadableSaveMessage) {
   setInterval(async () => { if (document.visibilityState === 'visible') useSyncedData(await cloud.syncNow()); }, SYNC_PULL_INTERVAL_MS);
 }
 render();
-if (!unreadableSaveMessage) cloud.syncNow({ force: true }).then(useSyncedData);
+if (!unreadableSaveMessage) cloud.syncNow({ force: true }).then(useSyncedData).then(pullPrivateFilesFromDatabase).catch(() => { /* optional: the sync card shows the real errors */ });

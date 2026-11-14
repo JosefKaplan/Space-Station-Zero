@@ -29,11 +29,18 @@ export function saveCrewRules(rules) {
   localStorage.setItem(CREW_RULES_STORAGE_KEY, JSON.stringify(rules));
 }
 
+export function forgetCrewRules() {
+  localStorage.removeItem(CREW_RULES_STORAGE_KEY);
+}
+
 // null when never fetched; a stored copy that no longer validates is an error, not a silent "none"
 export function loadCrewRules() {
   const storedText = localStorage.getItem(CREW_RULES_STORAGE_KEY);
   return storedText === null ? null : parseCrewRules(storedText);
 }
+
+// text that came from the private database instead of the file: same checks
+export const checkedCrewRules = (rules) => parseCrewRules(JSON.stringify(rules));
 
 export async function fetchLocalCrewRules() {
   let response;

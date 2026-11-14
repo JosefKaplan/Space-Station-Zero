@@ -12,7 +12,7 @@ Supabase project, so clearing the browser, switching phone or sharing a table do
    anon role has no access to the table.
 4. Signed out, the app sends nothing anywhere.
 
-Only game saves are stored. Never rulebook content or room layouts.
+Only game saves are stored, plus your own private copy of the book's room text and ability notes (see "The book's text on your other devices" below). Nothing is ever put in the public repo.
 
 ## One-time setup (about 10 minutes, free tier)
 
@@ -33,6 +33,19 @@ Only game saves are stored. Never rulebook content or room layouts.
 
 Keep the TOTP secret (or a backup code from your authenticator app) safe: losing it locks you out of the cloud copy
 (the local copy still works). You can delete the factor under Authentication → Users and enrol again.
+
+## The book's text on your other devices
+
+The room briefings, lore, rules and enemy stat tables, and the ability and equipment notes, are the book's text. They are not
+in the public repo, so the deployed site cannot show them by itself. They live in your `local/` files; to see them on your
+phone or on GitHub Pages too, keep a private copy in your database:
+
+1. Run `docs/supabase-setup.sql` again (it only adds the `private_files` table; the rest is safe to repeat).
+2. Open the app from the project folder (`python3 -m http.server 8000`), sign in under Settings → Sync, and press
+   **Copy room texts to my database**. Do it again whenever the `local/` files change.
+3. On any other device or the deployed site: sign in. The texts download by themselves. Signing out removes them from that browser.
+
+The table has the same lock as the saves (your password and a TOTP code).
 
 ## Several players
 

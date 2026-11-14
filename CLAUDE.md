@@ -42,7 +42,8 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
    requests. The one exception (decided by the owner): when signed in, saves sync to the owner's own Supabase project
    (`js/cloud-sync.js`, plain `fetch`, no library). It needs a password and a TOTP code, sign-ups are off, and row-level
    security in the database only lets an `aal2` session of the owner touch the rows (`docs/supabase-setup.sql`).
-   Signed out, nothing is sent anywhere. Only game saves go there: never rulebook content or room layouts. Tests
+   Signed out, nothing is sent anywhere. Only game saves go there, plus (decided by the owner, in the table `private_files`, same lock) a private copy of the
+   book's room text and ability notes from the local files, so the owner's own devices can show them: the Settings "Copy room texts" button uploads them, signing in downloads them, signing out removes them from that browser. Never anything for anyone else. Tests
    never talk to the live project (use the local mock, or a throwaway project).
 
 ## Conventions
