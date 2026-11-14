@@ -13,6 +13,7 @@ import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, room
 import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
+const SYNC_PULL_INTERVAL_MS = 60 * 1000;
 const appElement = document.getElementById('app');
 
 let state = null;
@@ -656,6 +657,17 @@ function syncStatusText(sync) {
   return 'Signed in. Changes upload a moment after you make them.';
 }
 
+// Sign-ups are off by design, so an account is made by hand in the owner's own Supabase project (docs/SYNC.md has the full setup)
+const HOW_TO_GET_AN_ACCOUNT = `<details class="how-to"><summary>No account yet? How to add one</summary>
+  <ol class="hint">
+    <li>Create a free project at supabase.com, then open <b>SQL Editor</b>, paste the contents of <code>docs/supabase-setup.sql</code> and run it.</li>
+    <li><b>Authentication → Sign In / Providers</b>: switch off "Allow new users to sign up" and set the minimum password length to 12 or more.</li>
+    <li><b>Authentication → Users → Add user → Create new user</b>: type your email and a long password, tick "Auto Confirm User", create.</li>
+    <li><b>Authentication → Multi-Factor</b>: make sure TOTP is enabled.</li>
+    <li><b>Project Settings → API Keys</b>: copy the project URL and the publishable key (never a secret key) into <code>js/config.js</code>, then reload the app.</li>
+    <li>Come back here and sign in with that email and password. The first time, scan the QR code with an authenticator app and type the 6-digit code.</li>
+  </ol></details>`;
+
 // the save sync: off until js/config.js is filled in, then email + password, then a TOTP code
 function renderSyncCard() {
   const sync = cloud.getSyncStatus();
@@ -663,9 +675,10 @@ function renderSyncCard() {
   const codeInput = `<label>6-digit code from your authenticator app<input inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-bind-ui="syncCode" value="${escapeHtml(ui.syncCode)}"></label>`;
   let body;
   if (!sync.isConfigured) {
-    body = '<p class="hint">Not set up. Your playthroughs live in this browser only. To keep a copy in your own free database too, follow docs/SYNC.md.</p>';
+    body = '<p class="hint">Not set up. Your playthroughs live in this browser only. To keep a copy in your own free database too, set one up first:</p>' + HOW_TO_GET_AN_ACCOUNT;
   } else if (sync.isSignedIn) {
     body = `<p class="hint">${escapeHtml(sync.email ?? '')} · ${escapeHtml(syncStatusText(sync))}</p>
+      <p class="hint">Automatic: changes upload a moment after you make them, and other devices' changes arrive every minute and when you come back to the app.</p>
       <div class="row"><button data-async-action="syncNow"${busy}>Sync now</button><button data-async-action="syncSignOut"${busy}>Sign out</button></div>`;
   } else if (ui.syncStep === 'enroll' && ui.syncEnrollment) {
     body = `<p class="hint">First time: scan this with an authenticator app (or type the secret in), then enter the code it shows.</p>
@@ -681,20 +694,21 @@ function renderSyncCard() {
     body = `<p class="hint">Sign in to keep a copy of all playthroughs in your own database. Without signing in, nothing leaves this browser.</p>
       <label>Email<input type="email" autocomplete="username" data-bind-ui="syncEmail" value="${escapeHtml(ui.syncEmail)}"></label>
       <label>Password<input type="password" autocomplete="current-password" data-bind-ui="syncPassword"></label>
-      <button class="primary" data-async-action="syncSignIn"${busy}>Sign in</button>`;
+      <button class="primary" data-async-action="syncSignIn"${busy}>Sign in</button>
+      ${HOW_TO_GET_AN_ACCOUNT}`;
   }
   return `<section class="card form"><h2>Sync</h2>${body}</section>`;
 }
 
 function renderSettings() {
-  return `<section class="card form"><h2>Save data</h2>
-      <p class="hint">Everything lives in this browser only, all playthroughs together. Export to back up or move to another device. Importing a backup replaces everything; importing the save of a single campaign adds it as a new playthrough.</p>
-      <button data-action="exportSave">Export save (JSON)</button>
-      <label class="file">Import save<input type="file" accept="application/json,.json" data-import></label>
-    </section>
-    ${renderSyncCard()}
+  return `${renderSyncCard()}
     <section class="card form"><h2>Party</h2>
       ${state.run ? `<p class="hint">Retiring archives the whole party (every crew) and lets a new one set out. Agenda progress and station legacy are kept.</p>${confirmButton('retireParty', 'Retire the party')}` : '<p class="hint">No crew aboard.</p>'}
+    </section>
+    <section class="card form"><h2>Save data</h2>
+      <p class="hint">Everything lives in this browser (and in your cloud copy, when sync is on), all playthroughs together. Export to back up or move to another device. Importing a backup replaces everything; importing the save of a single campaign adds it as a new playthrough.</p>
+      <button data-action="exportSave">Export save (JSON)</button>
+      <label class="file">Import save<input type="file" accept="application/json,.json" data-import></label>
     </section>
     <section class="card form"><h2>Danger</h2>${confirmButton('wipeEverything', 'Wipe everything (all playthroughs)')}</section>
     <section class="card"><p class="hint">Unofficial fan-made companion for Space Station Zero by Snarling Badger Studios. Contains no rules text — you need the rulebook to play.</p></section>`;
@@ -1075,7 +1089,13 @@ if (!unreadableSaveMessage) {
   cloud.restoreSession();
   store.onPlaythroughChange(() => cloud.schedulePush(useSyncedData));
   cloud.onSyncStatusChange(() => { if (ui.tab === 'settings' && !isTypingInAField() && !ui.isSyncBusy) render(); });
-  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') useSyncedData(await cloud.syncNow()); });
+  // leaving the tab uploads at once (the 1.5 s upload delay must not lose a last change); coming back pulls
+  document.addEventListener('visibilitychange', async () => {
+    useSyncedData(await cloud.syncNow({ force: document.visibilityState === 'hidden' }));
+  });
+  window.addEventListener('online', async () => useSyncedData(await cloud.syncNow({ force: true })));
+  // a second device may have changed something while this one stays open
+  setInterval(async () => { if (document.visibilityState === 'visible') useSyncedData(await cloud.syncNow()); }, SYNC_PULL_INTERVAL_MS);
 }
 render();
 if (!unreadableSaveMessage) cloud.syncNow({ force: true }).then(useSyncedData);

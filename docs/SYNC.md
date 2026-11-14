@@ -42,8 +42,9 @@ accounts is not built. Two players on one table can share the account (and its a
 ## How syncing behaves
 
 - The browser copy stays the main one, so the app is fast and works offline.
-- After a change the app uploads that playthrough a moment later, and pulls everything when it opens and when you come
-  back to the tab. The newest change of a playthrough wins, by the time of its last real change.
+- It is automatic: after a change the app uploads that playthrough a moment later (at once when you leave the tab), and
+  pulls everything when it opens, when you come back to the tab, when the connection returns, and every minute while it
+  is open. The newest change of a playthrough wins, by the time of its last real change.
 - Deleting a playthrough leaves a marker, so your other devices drop it too.
 - Do not edit on a device that has been closed for a long time before it has had a chance to pull (just open the app and
   wait for "Synced").
