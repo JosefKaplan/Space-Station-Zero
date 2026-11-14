@@ -22,11 +22,13 @@ are in the gitignored `.env` (`RULEBOOK_PDF_URL`, `RULEBOOK_PDF_LOCAL_PATH`); `.
 
 1. **No rulebook content in the repo.** The repo is public and the rulebook is a paid, copyrighted,
    watermarked PDF. Never commit the PDF, extracted text, flavour text, hidden-information text,
-   maps, or full rule/ability wording. Room footprints (fixed terrain, enemy spots, crew zone) are map content:
-   they live only in the owner's gitignored `local/room-layouts.json`, loaded into the browser's localStorage
-   (`js/room-layouts.js`). The same file holds each room's short briefing (enemy names and counts, hazards,
-   deadline, goal) and the book's own room text (lore, rules, enemy stat bars), extracted by
-   `local/extract-room-texts.py`. Never write any of it into tracked files, commits, chat, or examples built from real data. Allowed: challenge numbers and names, exit graph, page
+   maps, or full rule/ability wording. Exception, decided by the owner: the room footprints (crew zone, enemy areas, fixed terrain,
+   markers: geometry and map labels only) are public, in `data/room-footprints.json` (written by
+   `local/export-room-footprints.py`). Nothing else from the book goes there. Each room's short briefing (enemy names and counts,
+   hazards, deadline, goal) and the book's own room text (lore, rules, enemy stat bars) live only in the owner's gitignored
+   `local/room-layouts.json` (extracted by `local/extract-room-texts.py`), merged over the footprints in the browser
+   (`js/room-layouts.js`). The same goes for what crew abilities, equipment, edges and commander abilities do:
+   it lives only in the gitignored `local/crew-rules.json` (built by `local/extract-crew-rules.py`, shown as notes by `js/crew-rules.js`). Never write any of it into tracked files, commits, chat, or examples built from real data. Allowed: challenge numbers and names, exit graph, page
    references ("read p. 45"), table thresholds, stat numbers, names of ship types / crew types /
    edges / equipment. When the player needs wording, point at the page.
 2. **Spoiler safety.** The owner plays the campaign blind. The UI reveals a challenge's name only

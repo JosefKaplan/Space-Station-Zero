@@ -11,19 +11,20 @@ It replaces the paper roster and the "wait, which room were we in?" notes:
 - **Journey** — where your crew is, which exits are open, where you can backtrack to, and what is sealed behind you.
 - **Station map** — a map that fills in as you explore: your route, sealed sections, where crew members fell, and the faint trails of crews that came before.
 - **Roster** — commander and crew with stats, damage, XP, and reminders when someone has earned an advancement.
+- **Info notes** — on the Crew tab, folded notes under a member's abilities and equipment (and under the crew's edge) say what each one does, in the book's own words. They come from your private `local/crew-rules.json` (below) and do not exist without it.
 - **Crew builder** — pick ship and crew types, spend the commander's points, and add abilities and equipment from pick lists (names and page references only).
 - **After the challenge** — a short guided checklist: injuries, experience, agenda roll, pick the next door.
 - **Captain's log** — an automatic timeline of the run plus your own notes, exportable as text.
 - **Dice** — a d12 pool roller that counts successes for you.
 - **Room set-up** — rolls the book's random terrain and sketches it on the board with distances from the edges, around
-  the room's own footprint (fixed terrain, enemy spots, crew zone) from your private room layouts.
+  the room's own footprint (fixed terrain, enemy spots, crew zone) from the room footprints.
 
 It is spoiler-safe: rooms are revealed only when you reach them, and secrets stay in the book —
 the app just tells you which page to open.
 
-> You need the rulebook to play. This repo contains no rules text, maps, or story — only numbers,
-> names, and page references. The room layouts and the book's room text are the one thing that comes from the book:
-> they are never in this repo, only in a private local file you build yourself (see below). Unofficial fan project, not
+> You need the rulebook to play. This repo contains no rules text or story — only numbers, names, page references and
+> the room footprints (where the terrain and start zones sit on each map). The book's own room text and ability
+> descriptions are never in this repo, only in private local files you build yourself (see below). Unofficial fan project, not
 > affiliated with Snarling Badger Studios.
 
 ## Built with
@@ -59,13 +60,22 @@ One-time setup, about 10 minutes:
 
 Keep the authenticator's secret in a password manager too: losing it locks you out of the cloud copy (the local copy still works).
 
-## Room layouts (optional, private)
+## Room layouts
 
-Run from the project folder (`python3 -m http.server 8000`), the app loads `local/room-layouts.json` by itself at every
-start: each room's fixed terrain, enemy areas, objective markers, crew starting zone, briefing and the book's text, so the
-sketch matches the book's map. It is kept in your browser's storage afterwards and the repo never contains it (`local/` is
-gitignored). Served from anywhere else (GitHub Pages) there is no such file and the app works without the room layouts.
-Open the app on your phone through your computer's server (`http://<your computer's address>:8000`) to get them there too.
+The footprint of each room (crew start zone, enemy areas, fixed terrain, objective markers) is in
+[`data/room-footprints.json`](data/room-footprints.json), public, so the sketch matches the book's map everywhere,
+GitHub Pages included. Without more, a room shows its map and tells you to see the book for which enemies are there.
+
+Optionally, a private file adds each room's briefing and the book's own text. Run from the project folder
+(`python3 -m http.server 8000`), the app loads `local/room-layouts.json` by itself at every start and merges it over the
+footprints: enemies and where each group sets up, hazards, goal, deadline, the enemy stat table, and the lore and rules
+in folded sections. It is kept in your browser's storage afterwards and the repo never contains it (`local/` is
+gitignored). Served from anywhere else (GitHub Pages) there is no such file and the app shows the footprints only.
+Open the app on your phone through your computer's server (`http://<your computer's address>:8000`) to get the private part there too.
+After changing `local/room-layouts.json`, run `python3 local/export-room-footprints.py` to refresh the public footprints
+(it copies only the geometry).
+
+The format, for both files (the public one holds only `crewZone`, `enemyAreas`, `fixedTerrain` and `markers`):
 
 ```json
 { "schemaVersion": 2,
@@ -91,6 +101,10 @@ Inches, on the board as the book prints it (30" across, 22" deep), origin at the
 the point; without one it is a plain point (a drop spot). Random terrain keeps its 2" gap from fixed terrain and from
 circular markers; if a piece fits nowhere, the set-up says "no room" for it.
 Bad files are rejected with the path of the problem, and the previous layouts stay.
+
+The same applies to the info notes: `python3 local/extract-crew-rules.py` reads what abilities, equipment, edges and
+commander abilities do from your PDF into `local/crew-rules.json`, which the app loads the same way. The script stops and lists
+any name from `js/data.js` it cannot find in the book. Served from anywhere else (GitHub Pages) there is no such file and no notes.
 
 `.env` (gitignored; format in `.env.example`) holds the private link and local path of the rulebook PDF
 for whoever builds that file.
@@ -128,7 +142,7 @@ If the phone still shows the old version, reload the page.
 
 Saves are per browser and per address: a campaign started on `localhost` does not appear on the
 GitHub Pages address by itself. Either sign in to the sync (above) on both, or move it with **Settings → Export save** and
-**Import save**. The sync works from any address, Pages included; the room layouts below do not (they are local only).
+**Import save**. The sync works from any address, Pages included; the private briefings and book text below do not (they are local only).
 
 ## Docs
 

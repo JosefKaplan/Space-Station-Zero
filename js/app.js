@@ -8,8 +8,9 @@ import {
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as cloud from './cloud-sync.js';
+import { fetchLocalCrewRules, loadCrewRules, ruleNotesMentionedIn, saveCrewRules } from './crew-rules.js';
 import * as store from './state.js';
-import { fetchLocalRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
+import { fetchRoomLayouts, loadRoomLayouts, obstaclesForRandomTerrain, roomLayoutFor, saveRoomLayouts } from './room-layouts.js';
 import { generateTerrain, renderBoardSvg, renderMeasurementLinesSvg, roomLayoutLines, terrainPlacementsByQuadrant } from './terrain.js';
 
 const TABS = [['journey', 'Journey'], ['crew', 'Crew'], ['log', 'Log'], ['dice', 'Dice'], ['settings', 'Settings']];
@@ -18,6 +19,7 @@ const appElement = document.getElementById('app');
 
 let state = null;
 let roomLayouts = null;
+let crewRules = null;   // what abilities, equipment and edges do: the book's wording, only from the private local file
 let unreadableSaveMessage = null;
 const ui = {
   tab: 'journey',
@@ -195,6 +197,13 @@ function renderEnemyLine(enemy) {
     ${enemy.when ? `<br><i>${escapeHtml(enemy.when)}</i>` : ''}${enemy.hidden && enemy.areas ? '<br><i>placed once revealed</i>' : ''}</li>`;
 }
 
+// without the private briefing (the public footprints only) an empty enemy list means "not known here", not "none"
+function enemyLineWithoutBriefing(roomLayout) {
+  if (roomLayout.lore !== undefined) return 'None.';
+  const areas = (roomLayout.enemyAreas ?? []).map((area) => area.label);
+  return areas.length ? `Set up in ${areas.join(', ')} (marked on the map). Which enemies and how many: see the book.` : 'Which enemies, if any: see the book.';
+}
+
 // the room in a few lines: who sets up where, what to beat, what can kill the crew
 function renderRoomSummary(roomLayout) {
   const crewLine = roomLayoutLines(roomLayout).find((line) => line.group.startsWith('Your crew'));
@@ -209,7 +218,7 @@ function renderRoomSummary(roomLayout) {
       ${crewLine && roomLayout.crewNote ? `<p>${escapeHtml(roomLayout.crewNote)}</p>` : ''}</div></div>
     <div class="glance-row enemy"><span class="swatch enemy"></span><div><h4>Enemies</h4>
       ${roomLayout.enemyNote ? `<p>${escapeHtml(roomLayout.enemyNote)}</p>` : ''}
-      ${hasEnemies ? `<ul class="plain">${roomLayout.enemies.map(renderEnemyLine).join('')}</ul>` : (roomLayout.enemyNote ? '' : '<p>None.</p>')}</div></div>` : ''}
+      ${hasEnemies ? `<ul class="plain">${roomLayout.enemies.map(renderEnemyLine).join('')}</ul>` : (roomLayout.enemyNote ? '' : `<p>${enemyLineWithoutBriefing(roomLayout)}</p>`)}</div></div>` : ''}
     ${roomLayout.deadline ? `<p class="deadline">⏱ ${escapeHtml(roomLayout.deadline)}</p>` : ''}
     ${roomLayout.goal ? `<p class="goal"><b>Goal:</b> ${escapeHtml(roomLayout.goal)}</p>` : ''}
     ${(roomLayout.hazards ?? []).length ? `<h4 class="plain-heading">Hazards and objectives</h4><ul class="plain">${roomLayout.hazards.map((hazard) => `<li>${escapeHtml(hazard)}</li>`).join('')}</ul>` : ''}
@@ -266,7 +275,7 @@ function renderLore(roomLayout) {
 }
 
 function renderRoomInfo(roomLayout) {
-  if (!roomLayout) return '<p class="hint">No room layouts loaded: they come from <code>local/room-layouts.json</code> when the app is served from the project folder.</p>';
+  if (!roomLayout) return '<p class="hint">No room layout loaded for this challenge: the footprints come from <code>data/room-footprints.json</code>.</p>';
   return `${renderRoomSummary(roomLayout)}${renderEnemyStats(roomLayout.stats)}${renderRoomRules(roomLayout)}`;
 }
 
@@ -486,6 +495,7 @@ function renderCrewGroup(crew, crewIndex) {
       <input class="title-input" data-bind="run.crews.${crewIndex}.name" value="${escapeHtml(crew.name)}" aria-label="Crew name">
       <p class="hint">${crew.size}-person crew · ${escapeHtml(crew.shipType)} ship · ${escapeHtml(crew.edge)}
       ${progress ? ` · ${AGENDAS[progress.agendaKey].name} agenda ${progress.found}/${progress.partsNeeded}` : ''}</p>
+      ${renderEdgeNote(crew.edge)}
       <p class="hint">Starting gear (p. 36): one weapon each, plus ${STARTING_OTHER_EQUIPMENT + SHIP_TYPES[crew.shipType].extraStartingEquipment} other pieces for the whole crew. Commander's bonus piece: p. 32.</p>
       ${run.crews.length > 1 ? confirmButton('removeCrew', 'Remove this crew from the party', `data-crew-id="${escapeHtml(crew.id)}"`) : ''}
     </section>
@@ -516,6 +526,18 @@ function equipmentPickerOptions(shipType) {
     }</optgroup>`)).join('');
 }
 
+// folded notes: what the abilities / equipment named in a free-text field do (nothing when the private rules file is absent)
+function renderRuleNotes(kind, freeText) {
+  const notes = ruleNotesMentionedIn(crewRules, kind, freeText);
+  return notes.length ? `<div class="rule-notes">${notes.map((note) => `<details class="rule-note"><summary>ⓘ ${escapeHtml(note.name)}${note.tags ? ` · ${escapeHtml(note.tags)}` : ''}</summary>
+    <p>${escapeHtml(note.text)}</p></details>`).join('')}</div>` : '';
+}
+
+function renderEdgeNote(edge) {
+  const text = crewRules?.edges[edge];
+  return text ? `<details class="rule-note"><summary>ⓘ Edge: ${escapeHtml(edge)}</summary><p>${escapeHtml(text)}</p></details>` : '';
+}
+
 function renderMember(member, index, crewIndex, crew) {
   const path = `run.crews.${crewIndex}.members.${index}`;
   const advancement = store.pendingAdvancement(member);
@@ -537,8 +559,10 @@ function renderMember(member, index, crewIndex, crew) {
     <div class="stats two">${stepper('Damage', `${path}.damage`, member.damage)}${stepper('XP', `${path}.xp`, member.xp)}</div>
     <textarea rows="2" placeholder="Special abilities" data-bind="${path}.abilities">${escapeHtml(member.abilities)}</textarea>
     ${appendPicker(`${path}.abilities`, '+ Add ability…', abilityPickerOptions())}
+    ${renderRuleNotes('abilities', member.abilities)}
     <textarea rows="2" placeholder="Equipment" data-bind="${path}.equipment">${escapeHtml(member.equipment)}</textarea>
     ${appendPicker(`${path}.equipment`, '+ Add equipment…', equipmentPickerOptions(crew.shipType))}
+    ${renderRuleNotes('equipment', member.equipment)}
     ${member.isCommander ? '' : confirmButton('removeMember', 'Remove', `data-crew="${crewIndex}" data-index="${index}"`)}
   </section>`;
 }
@@ -567,11 +591,13 @@ function renderNewCrewForm({ isFirstCrew }) {
     <label>Crew name<input data-bind-ui="newCrew.name" value="${escapeHtml(draft.name)}"></label>
     <label>Crew size<select data-bind-ui="newCrew.size" data-rerender data-number>${options(Object.keys(BASE_STATS_BY_CREW_SIZE).map((size) => [size, `${size} + commander`]), draft.size)}</select></label>
     <label>Ship type<select data-bind-ui="newCrew.shipType" data-rerender>${options(Object.keys(SHIP_TYPES).map((type) => [type, type]), draft.shipType)}</select></label>
-    <label>Edge (p. 34–36)<select data-bind-ui="newCrew.edge">${options(EDGES.map((edge) => [edge, edge]), draft.edge)}</select></label>
+    <label>Edge (p. 34–36)<select data-bind-ui="newCrew.edge" data-rerender>${options(EDGES.map((edge) => [edge, edge]), draft.edge)}</select></label>
+    ${renderEdgeNote(draft.edge)}
     <label>Secondary agenda (optional, d12 on p. 39)<select data-bind-ui="newCrew.agenda">${options([['', 'None'], ...Object.entries(AGENDAS).map(([key, agenda]) => [key, agenda.name])], draft.agenda)}</select></label>
     <h3>Commander</h3>
     <label>Commander name<input data-bind-ui="newCrew.commanderName" value="${escapeHtml(draft.commanderName)}"></label>
     <p class="hint">${escapeHtml(ship.commanderAbility)} (p. ${ABILITY_PAGES[ship.commanderAbility]}) · free stat points left: <b>${pointsLeft}</b> of ${COMMANDER_FREE_STAT_POINTS}</p>
+    ${renderRuleNotes('abilities', ship.commanderAbility)}
     <div class="stats">${STAT_KEYS.map((stat) => stepper(STAT_LABELS[stat], stat, commanderStat(stat), 'spendCommanderPoint')).join('')}</div>
     <h3>Crew</h3>
     <p class="hint">Who you may recruit, and how many of each: p. ${ship.page}. At most one advanced crew member.</p>
@@ -1040,8 +1066,9 @@ try {
 }
 try {
   roomLayouts = loadRoomLayouts();
+  crewRules = loadCrewRules();
 } catch (error) {
-  ui.errorMessage = `Stored room layouts are unreadable (they are loaded again from local/room-layouts.json when served from the project folder): ${error.message}`;
+  ui.errorMessage = `Stored room layouts are unreadable (they are loaded again from the layout files at the next start): ${error.message}`;
 }
 appElement.addEventListener('click', handleClick);
 // a <details> reports opening and closing with a `toggle` event that does not bubble, hence the capture
@@ -1064,21 +1091,32 @@ appElement.addEventListener('mouseout', (event) => {
 appElement.addEventListener('input', handleInput);
 appElement.addEventListener('change', handleImport);
 
-// served from the project folder: pick up local/room-layouts.json by itself
+// the public footprints, and from the project folder also the private briefings and book text
 // A re-render drops focus and swallows keystrokes, so it is skipped while a field is being edited (the layouts are
 // then used from the next render) and when the file is what is already loaded.
 const isTypingInAField = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-fetchLocalRoomLayouts().then((localLayouts) => {
-  if (!localLayouts) return;
-  const isNewContent = JSON.stringify(localLayouts) !== JSON.stringify(roomLayouts);
-  saveRoomLayouts(localLayouts);
-  roomLayouts = localLayouts;
+fetchRoomLayouts().then((fetchedLayouts) => {
+  if (!fetchedLayouts) return;
+  const isNewContent = JSON.stringify(fetchedLayouts) !== JSON.stringify(roomLayouts);
+  saveRoomLayouts(fetchedLayouts);
+  roomLayouts = fetchedLayouts;
   if (!isNewContent && !ui.errorMessage) return;
   ui.errorMessage = null;
   if (!isTypingInAField()) render();
 }).catch((error) => {
-  ui.errorMessage = `local/room-layouts.json is not valid, nothing was loaded: ${error.message}`;
+  ui.errorMessage = error.message;
+  if (!isTypingInAField()) render();
+});
+
+fetchLocalCrewRules().then((localRules) => {
+  if (!localRules) return;
+  const isNewContent = JSON.stringify(localRules) !== JSON.stringify(crewRules);
+  saveCrewRules(localRules);
+  crewRules = localRules;
+  if (isNewContent && !isTypingInAField()) render();
+}).catch((error) => {
+  ui.errorMessage = `local/crew-rules.json is not valid, nothing was loaded: ${error.message}`;
   if (!isTypingInAField()) render();
 });
 

@@ -285,6 +285,12 @@ details[open] > summary::after { transform: rotate(180deg); }
 details[open] > summary { border-color: var(--accent); }
 summary:active { transform: translate(3px, 3px); box-shadow: none; }
 details > :not(summary) { margin-top: 8px; }
+/* what an ability / piece of equipment does: a lighter fold than the section buttons */
+.rule-notes { margin-bottom: 8px; }
+.rule-note { margin: 6px 0; }
+.rule-note > summary { min-height: 36px; padding: 4px 10px; font-size: 14px; font-weight: 500; box-shadow: none; color: var(--muted); }
+.rule-note[open] > summary { color: var(--text); }
+.rule-note > p { margin: 6px 2px 2px; font-size: 14px; line-height: 1.5; color: var(--text); }
 .setout-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-raised); border: 2px solid var(--accent); }
 .action-bar { display: flex; gap: 8px; padding: 10px 0 4px; margin-top: 10px; }
 .action-bar .primary { flex: 1; }

@@ -1,7 +1,8 @@
 // Each room's own footprint on the board: fixed terrain, enemy starting areas, objective and drop-point markers,
 // the crew's starting zone, plus a short briefing.
-// This comes from the owner's private file local/room-layouts.json (gitignored: CLAUDE.md, hard rule 1), loaded by itself
-// where the app is served from the project folder, and kept in this browser's localStorage.
+// The footprints are public (data/room-footprints.json, the owner's decision: CLAUDE.md, hard rule 1). The briefing and
+// the book's own text come from the owner's private file local/room-layouts.json (gitignored), loaded by itself where the
+// app is served from the project folder and merged over the footprints. Both are kept in this browser's localStorage.
 // All numbers are inches on the board as the book prints it (30" across, 22" deep), measured from its top-left corner.
 import { BOARD_HEIGHT_INCHES, BOARD_WIDTH_INCHES, CHALLENGES } from './data.js';
 
@@ -132,20 +133,33 @@ export function loadRoomLayouts() {
   return storedText === null ? null : parseRoomLayouts(storedText);
 }
 
-const ROOM_LAYOUTS_FILE_PATH = 'local/room-layouts.json';
+const PUBLIC_FOOTPRINTS_FILE_PATH = 'data/room-footprints.json';
+const PRIVATE_ROOM_LAYOUTS_FILE_PATH = 'local/room-layouts.json';
 
-// The owner's file sits in the gitignored local/ folder, so it exists only where the app is served from the project
-// folder (python3 -m http.server). There it replaces the stored copy at every start; anywhere else (GitHub Pages) it
-// is simply not found and the stored copy is used. Returns the layouts, or null if not served.
-export async function fetchLocalRoomLayouts() {
+// null when the file is not there (a normal case for the private one); a file that is there but bad is an error naming it
+async function fetchRoomLayoutsFile(path) {
   let response;
   try {
-    response = await fetch(ROOM_LAYOUTS_FILE_PATH, { cache: 'no-cache' });
+    response = await fetch(path, { cache: 'no-cache' });
   } catch {
     return null;
   }
   if (!response.ok) return null;
-  return parseRoomLayouts(await response.text());
+  try {
+    return parseRoomLayouts(await response.text());
+  } catch (error) {
+    throw new Error(`${path} is not valid, nothing was loaded: ${error.message}`);
+  }
+}
+
+// the public footprints, with each room's private briefing and book text added when the private file is there
+export async function fetchRoomLayouts() {
+  const [publicLayouts, privateLayouts] = await Promise.all([fetchRoomLayoutsFile(PUBLIC_FOOTPRINTS_FILE_PATH), fetchRoomLayoutsFile(PRIVATE_ROOM_LAYOUTS_FILE_PATH)]);
+  if (!publicLayouts) return privateLayouts;
+  if (!privateLayouts) return publicLayouts;
+  const rooms = { ...publicLayouts.rooms };
+  for (const [number, privateRoom] of Object.entries(privateLayouts.rooms)) rooms[number] = { ...rooms[number], ...privateRoom };
+  return { ...publicLayouts, rooms };
 }
 
 export function roomLayoutFor(layouts, challengeNumber) {
