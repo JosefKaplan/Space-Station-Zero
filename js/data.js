@@ -73,6 +73,35 @@ export const EQUIPMENT_CATEGORIES = {
 export const WEAPONS = ['Sidearm', 'Melee Weapon', 'Energy Melee Weapon', 'Energy Missile Weapon',
   'Heavy Kinetic Missile Weapon', 'Heavy Melee Weapon'];
 
+// An edge that grants more starting pieces than the base allowance, and from which categories they may come (p. 34–36)
+const EDGE_EXTRA_STARTING_EQUIPMENT = { Smugglers: { count: 3, categories: ['weaponry', 'advancedTechnology'] } };
+
+const itemsOfCategories = (categoryKeys) => [...new Set(categoryKeys.flatMap((key) => EQUIPMENT_CATEGORIES[key].items))];
+
+// What a new crew may start with (p. 36): one weapon each, a number of other pieces for the whole crew (each slot names the
+// categories it may come from), and one bonus piece for the commander from the ship's lists or Advanced Technology.
+export function startingGearRules(shipType, edge) {
+  const ship = SHIP_TYPES[shipType];
+  const edgeExtra = EDGE_EXTRA_STARTING_EQUIPMENT[edge];
+  const otherSlotCount = STARTING_OTHER_EQUIPMENT + ship.extraStartingEquipment;
+  const otherSlots = [
+    ...Array(otherSlotCount).fill(ship.equipmentCategories),
+    ...(edgeExtra ? Array(edgeExtra.count).fill(edgeExtra.categories) : []),
+  ].map((categoryKeys) => ({ categoryKeys, items: itemsOfCategories(categoryKeys) }));
+  return {
+    weaponItems: itemsOfCategories(ship.equipmentCategories).filter((item) => WEAPONS.includes(item)),
+    otherSlots,
+    bonusItems: itemsOfCategories([...ship.equipmentCategories, 'advancedTechnology']),
+  };
+}
+
+// "Sidearm (p. 36)": the same line the roster's equipment picker writes
+export function equipmentLine(item) {
+  const category = Object.values(EQUIPMENT_CATEGORIES).find((candidate) => candidate.items.includes(item));
+  if (!category) throw new Error(`${item} is not a piece of equipment from the rulebook.`);
+  return `${item} (p. ${category.page})`;
+}
+
 export const EDGES = [
   'Armored Force', 'Nano Tech', 'Psionic Talent', 'Telekinesis', 'Artificial Life Forms',
   'Warrior Born', 'Hive Mind', 'Harmonious Culture', 'Natural Brutes', 'Smugglers',

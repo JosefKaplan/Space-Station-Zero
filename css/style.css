@@ -384,3 +384,13 @@ table.enemy-stats tr.not-yours > * { opacity: .35; }
 
 .totp-qr { display: block; width: 200px; max-width: 100%; margin: 8px auto; background: #fff; padding: 8px; border-radius: 6px; }
 button[disabled] { opacity: .5; cursor: progress; }
+
+/* saved starting crews */
+.template-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 2px solid var(--line); }
+.template-row small { display: block; color: var(--muted); }
+.template-row button { flex: none; }
+
+/* sections inside Settings */
+.subtabs { display: flex; gap: 8px; margin: 12px 0; }
+.subtabs button { flex: 1; }
+.subtabs button.active { background: var(--accent); color: var(--ink); border-color: var(--ink); }

@@ -2,13 +2,13 @@
 import {
   ABILITY_PAGES, AGENDAS, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_ADVANCEMENTS, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_ADVANCEMENTS, CREW_TYPES, INJURY_ROLL_MAX, INJURY_ROLL_MIN, MAX_LEGACY_COUNT,
-  SHIP_TYPES, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, injuryOutcomeForRoll,
+  SHIP_TYPES, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, equipmentLine, injuryOutcomeForRoll, startingGearRules,
 } from './data.js';
 import { isValidTerrain } from './terrain.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
 const SCHEMA_VERSION = 6;   // of one playthrough's state (station + run)
-const STORE_VERSION = 6;    // of what is saved: a list of named playthroughs
+const STORE_VERSION = 7;    // of what is saved: a list of named playthroughs and the saved starting crews
 const MAX_PLAYTHROUGH_NAME_LENGTH = 40;
 export const MAX_CREWS = 4;   // crews travelling together in one playthrough
 const MEMBER_STATUSES = ['active', 'recovering', 'dead'];
@@ -145,7 +145,8 @@ function migratedState(saved) {
 }
 
 // ---------- playthroughs ----------
-// What is saved is { schemaVersion: 6, activeId, playthroughs: [{ id, name, state, updatedAt }], deletedIds: [{ id, at }] }. Each playthrough is a whole,
+// What is saved is { schemaVersion: 7, activeId, playthroughs: [{ id, name, state, updatedAt }], deletedIds: [{ id, at }],
+// crewTemplates: [{ id, name, draft }], crewTemplatesUpdatedAt }. Each playthrough is a whole,
 // separate campaign (its own station layer and run). The app works on the active one's `state` object directly, so
 // everything that changes it only has to call saveState().
 
@@ -178,15 +179,19 @@ function validatedPlaythroughName(name, otherNames) {
   return trimmed;
 }
 
+const isValidTemplate = (template) => isPlainObject(template) && typeof template.id === 'string' && template.id !== ''
+  && typeof template.name === 'string' && template.name.trim() !== '' && isPlainObject(template.draft);
+const validTemplates = (templates) => (Array.isArray(templates) ? templates.filter(isValidTemplate) : []);
+
 function freshStore() {
   const id = newPlaythroughId();
-  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: createEmptyState(), updatedAt: Date.now() }], deletedIds: [] };
+  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: createEmptyState(), updatedAt: Date.now() }], deletedIds: [], crewTemplates: [], crewTemplatesUpdatedAt: 0 };
 }
 
 // a save from before playthroughs existed is one playthrough
 function storeFromSingleState(state) {
   const id = newPlaythroughId();
-  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: migratedState(state), updatedAt: Date.now() }], deletedIds: [] };
+  return { schemaVersion: STORE_VERSION, activeId: id, playthroughs: [{ id, name: 'Playthrough 1', state: migratedState(state), updatedAt: Date.now() }], deletedIds: [], crewTemplates: [], crewTemplatesUpdatedAt: 0 };
 }
 
 function validatedStore(saved) {
@@ -202,6 +207,10 @@ function validatedStore(saved) {
   }
   saved.deletedIds = (Array.isArray(saved.deletedIds) ? saved.deletedIds : []).filter((marker) => isPlainObject(marker) && typeof marker.id === 'string' && Number.isFinite(marker.at));
   requireValid(ids.has(saved.activeId), 'the active playthrough');
+  // a store from before saved starting crews has none
+  saved.crewTemplates = validTemplates(saved.crewTemplates);
+  if (!Number.isFinite(saved.crewTemplatesUpdatedAt)) saved.crewTemplatesUpdatedAt = 0;
+  saved.schemaVersion = STORE_VERSION;
   return saved;
 }
 
@@ -321,6 +330,42 @@ export function importSave(text) {
   return activeEntry().state;
 }
 
+// ---------- saved starting crews ----------
+// A starting crew is the creator's form as it was when saved: name, ship, edge, commander, crew and the starting gear.
+// It is a recipe, never a live crew: a campaign that uses it gets its own fresh crew, and nothing a crew earns in a
+// campaign (XP, boosts, equipment) ever flows back. So a template stays the same, always.
+
+export const CREW_TEMPLATES_ROW_ID = 'crew-templates';   // how the whole list travels through the cloud table
+
+function notifyCrewTemplatesChanged() {
+  store.crewTemplatesUpdatedAt = Date.now();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  changeListeners.forEach((listener) => listener(CREW_TEMPLATES_ROW_ID));
+}
+
+export const listCrewTemplates = () => store.crewTemplates;
+
+// Without an id, saving under a name that exists replaces that template. With the id of the template being edited the
+// name may change, but not to another template's name.
+export function saveCrewTemplate(draft, id = null) {
+  const name = String(draft.name ?? '').trim();
+  if (name === '') throw new Error('Give the crew a name first: it is the name of the saved starting crew.');
+  const sameName = store.crewTemplates.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+  if (id && sameName && sameName.id !== id) throw new Error(`There is already a starting crew called "${sameName.name}".`);
+  const existing = id ? store.crewTemplates.find((candidate) => candidate.id === id) : sameName;
+  if (id && !existing) throw new Error('That starting crew no longer exists.');
+  const template = { id: existing?.id ?? newId(), name, draft: structuredClone(draft) };
+  store.crewTemplates = [...store.crewTemplates.filter((candidate) => candidate !== existing), template]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  notifyCrewTemplatesChanged();
+  return { template, replaced: Boolean(existing) };
+}
+
+export function deleteCrewTemplate(id) {
+  store.crewTemplates = store.crewTemplates.filter((template) => template.id !== id);
+  notifyCrewTemplatesChanged();
+}
+
 // ---------- for syncing (js/cloud-sync.js) ----------
 
 // the empty "Playthrough 1" a brand-new browser starts with, never touched: it is not worth uploading, and it makes
@@ -329,8 +374,19 @@ const isUntouchedStarter = (entry) => entry.name === 'Playthrough 1' && JSON.str
 
 // Rows from the cloud are untrusted: each one is checked like an imported save, and a bad one is skipped and reported.
 // Returns { changed: boolean (anything local changed), activeReplaced: boolean (the active state object is a new one) }.
-export function mergeRemotePlaythroughs(rows) {
+export function mergeRemotePlaythroughs(allRows) {
   const result = { changed: false, activeReplaced: false, skipped: [] };
+  const templatesRow = allRows.find((row) => row.id === CREW_TEMPLATES_ROW_ID);
+  const rows = allRows.filter((row) => row !== templatesRow);
+  if (templatesRow && !templatesRow.deleted && templatesRow.updated_at > store.crewTemplatesUpdatedAt) {
+    try {
+      store.crewTemplates = validTemplates(templatesRow.state?.templates);
+      store.crewTemplatesUpdatedAt = templatesRow.updated_at;
+      result.changed = true;
+    } catch (error) {
+      result.skipped.push(`saved starting crews: ${error.message}`);
+    }
+  }
   const deletedLocally = new Set(store.deletedIds.map((marker) => marker.id));
   for (const row of rows) {
     if (deletedLocally.has(row.id)) continue;   // deleted here: the marker is uploaded instead
@@ -377,6 +433,9 @@ export function rowsToUpload(remoteUpdatedAtById) {
     .filter((entry) => !isUntouchedStarter(entry))
     .filter((entry) => !remoteUpdatedAtById.has(entry.id) || entry.updatedAt > remoteUpdatedAtById.get(entry.id))
     .map((entry) => ({ id: entry.id, name: entry.name, state: entry.state, updated_at: entry.updatedAt, deleted: false }));
+  if (store.crewTemplatesUpdatedAt > 0 && (!remoteUpdatedAtById.has(CREW_TEMPLATES_ROW_ID) || store.crewTemplatesUpdatedAt > remoteUpdatedAtById.get(CREW_TEMPLATES_ROW_ID))) {
+    rows.push({ id: CREW_TEMPLATES_ROW_ID, name: 'Saved starting crews', state: { templates: store.crewTemplates }, updated_at: store.crewTemplatesUpdatedAt, deleted: false });
+  }
   // a deletion only needs telling to the cloud if the cloud has the playthrough at all
   const tombstones = store.deletedIds
     .filter((marker) => remoteUpdatedAtById.has(marker.id))
@@ -418,11 +477,36 @@ function statsWithBonus(baseStats, bonus) {
   return stats;
 }
 
-export function createMember({ name, type, isCommander, stats, abilities = '' }) {
+export function createMember({ name, type, isCommander, stats, abilities = '', equipment = '' }) {
   return {
     id: newId(), name, type, isCommander, stats,
-    damage: 0, xp: 0, advancementsTaken: 0, abilities, equipment: '', status: 'active', diedInChallenge: null,
+    damage: 0, xp: 0, advancementsTaken: 0, abilities, equipment, status: 'active', diedInChallenge: null,
   };
+}
+
+// What the creator form's gear picks come to for this ship and edge: picks the rules do not allow (left over from another
+// ship, say) are dropped and a carrier outside the crew becomes the commander. weapons[0] is the commander's; carriers are
+// 0 (commander) to size (the last crew member).
+export function sanitizedStartingGear({ size, shipType, edge, weapons = [], bonusItem = '', otherItems = [], otherCarriers = [] }) {
+  const rules = startingGearRules(shipType, edge);
+  const allowedOr = (items, item) => (items.includes(item) ? item : '');
+  return {
+    weapons: Array.from({ length: size + 1 }, (_, index) => allowedOr(rules.weaponItems, weapons[index])),
+    bonusItem: allowedOr(rules.bonusItems, bonusItem),
+    others: rules.otherSlots.map((slot, index) => ({
+      item: allowedOr(slot.items, otherItems[index]),
+      carrier: Number.isInteger(otherCarriers[index]) && otherCarriers[index] >= 0 && otherCarriers[index] <= size ? otherCarriers[index] : 0,
+    })),
+  };
+}
+
+// the equipment text of the commander (index 0) and of each crew member, one piece per line like the roster's picker writes it
+function startingEquipmentByMember(gear, size) {
+  const lines = Array.from({ length: size + 1 }, () => []);
+  gear.weapons.forEach((item, index) => { if (item) lines[index].push(equipmentLine(item)); });
+  if (gear.bonusItem) lines[0].push(equipmentLine(gear.bonusItem));
+  gear.others.forEach(({ item, carrier }) => { if (item) lines[carrier].push(equipmentLine(item)); });
+  return lines.map((memberLines) => memberLines.join('\n'));
 }
 
 function abilityLines(abilityNames) {
@@ -436,7 +520,7 @@ export function addLogEntry(run, text, isNote = false) {
 export const allMembers = (run) => run.crews.flatMap((crew) => crew.members);
 
 // the first crew starts the run; the others join it (up to MAX_CREWS), all travelling together from then on
-export function addCrew(state, { name, size, shipType, edge, agenda, commanderName, commanderPoints, memberNames, memberTypes }) {
+export function addCrew(state, { name, size, shipType, edge, agenda, commanderName, commanderPoints, memberNames, memberTypes, weapons, bonusItem, otherItems, otherCarriers }) {
   if (state.run?.ended) throw new Error('This run has ended: retire the party to start a new one.');
   if (state.run && state.run.crews.length >= MAX_CREWS) throw new Error(`A party has at most ${MAX_CREWS} crews.`);
   const rival = agenda && state.run?.crews.find((crew) => crew.agenda === agenda);
@@ -448,13 +532,14 @@ export function addCrew(state, { name, size, shipType, edge, agenda, commanderNa
   if (unavailableType) throw new Error(`${unavailableType} cannot be recruited on a ${shipType} ship (p. ${ship.page}).`);
   if (commanderPointsSpent(commanderPoints) > COMMANDER_FREE_STAT_POINTS) throw new Error(`The commander has only ${COMMANDER_FREE_STAT_POINTS} free stat points.`);
 
+  const startingEquipment = startingEquipmentByMember(sanitizedStartingGear({ size, shipType, edge, weapons, bonusItem, otherItems, otherCarriers }), size);
   const members = [
     createMember({ name: commanderName || 'Commander', type: 'Commander', isCommander: true,
       stats: statsWithBonus(statsWithBonus(baseStats, ship.commanderBonus), commanderPoints),
-      abilities: abilityLines([ship.commanderAbility]) }),
+      abilities: abilityLines([ship.commanderAbility]), equipment: startingEquipment[0] }),
     ...chosenTypes.map((type, index) => createMember({
       name: memberNames[index]?.trim() || `Crew ${index + 1}`, type, isCommander: false, stats: statsWithBonus(baseStats, CREW_TYPES[type].bonus),
-      abilities: abilityLines(CREW_TYPES[type].abilities),
+      abilities: abilityLines(CREW_TYPES[type].abilities), equipment: startingEquipment[index + 1],
     })),
   ];
   // a finished agenda can be taken again by a new crew; unfinished progress carries over

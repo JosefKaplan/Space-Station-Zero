@@ -12,6 +12,7 @@ It replaces the paper roster and the "wait, which room were we in?" notes:
 - **Station map** — a map that fills in as you explore: your route, sealed sections, where crew members fell, and the faint trails of crews that came before.
 - **Roster** — commander and crew with stats, damage, XP, and reminders when someone has earned an advancement.
 - **Info notes** — on the Crew tab, folded notes under a member's abilities and equipment (and under the crew's edge) say what each one does, in the book's own words. They come from your private `local/crew-rules.json` (below) and do not exist without it.
+- **Starting crews** — the crew builder has empty slots for the starting gear (one weapon each, the other pieces, the commander's bonus piece, as the book limits them), so a new crew starts fully equipped. Manage them under Settings → Starting crews (create, edit, delete: it works while another campaign is running), or save the crew you are building. Use one for any new campaign: you always get a fresh, fully geared copy, and what a crew earns later never changes the saved one. They sync with your saves.
 - **Crew builder** — pick ship and crew types, spend the commander's points, and add abilities and equipment from pick lists (names and page references only).
 - **After the challenge** — a short guided checklist: injuries, experience, agenda roll, pick the next door.
 - **Captain's log** — an automatic timeline of the run plus your own notes, exportable as text.

@@ -3,7 +3,7 @@
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_TYPES, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
-  LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS,
+  LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS, startingGearRules,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
@@ -58,10 +58,20 @@ const ui = {
   noticeMessage: null,
   logNote: '',
   dice: { pool: 5, needed: '', target: '', rolled: null, isHelpOpen: false },
-  newCrew: { name: '', commanderName: '', size: 6, shipType: 'Exploration', edge: EDGES[0], agenda: '',
-    commanderPoints: store.zeroStats(), memberNames: Array(8).fill(''),
-    memberTypes: Array(8).fill('Soldier') },
+  // Settings → Starting crews: the section shown, and the saved starting crew being edited ('new' for a new one) with its form
+  settingsSection: 'general',
+  editingTemplateId: null,
+  templateDraft: null,
+  newCrew: { size: 6, shipType: 'Exploration', edge: EDGES[0], memberTypes: Array(8).fill('Soldier'), ...blankCrewFormFields() },
 };
+
+// what the creator form starts from for each new crew (size, ship, edge and the crew types are kept between crews)
+function blankCrewFormFields() {
+  return {
+    name: '', commanderName: '', agenda: '', commanderPoints: store.zeroStats(), memberNames: Array(8).fill(''),
+    weapons: Array(9).fill(''), bonusItem: '', otherItems: Array(8).fill(''), otherCarriers: Array(8).fill(0),
+  };
+}
 
 // ---------- helpers ----------
 
@@ -483,8 +493,8 @@ function renderSetOutBar() {
 }
 
 function renderCrew() {
-  if (!state.run) return renderNewCrewForm({ isFirstCrew: true });
-  if (ui.isAddingCrew) return renderNewCrewForm({ isFirstCrew: false });
+  if (!state.run) return renderCrewForm({ draftName: 'newCrew', isFirstCrew: true });
+  if (ui.isAddingCrew) return renderCrewForm({ draftName: 'newCrew' });
   const run = state.run;
   const canAddCrew = !run.ended && run.crews.length < store.MAX_CREWS;
   return `${renderSetOutBar()}${run.crews.map(renderCrewGroup).join('')}
@@ -579,37 +589,80 @@ function newCrewMemberTypes(draft) {
   return draft.memberTypes.slice(0, draft.size).map((type) => (availableTypes.includes(type) ? type : availableTypes[0]));
 }
 
-function renderNewCrewForm({ isFirstCrew }) {
-  const draft = ui.newCrew;
+function gearPickerOptions(allowedItems, selectedItem) {
+  const groups = Object.values(EQUIPMENT_CATEGORIES).map((category) => ({ category, items: category.items.filter((item) => allowedItems.includes(item)) }))
+    .filter((group) => group.items.length > 0);
+  return `<option value="">— none —</option>${groups.map(({ category, items }) => (
+    `<optgroup label="${escapeHtml(category.name)} (p. ${category.page})">${options(items.map((item) => [item, WEAPONS.includes(item) ? `${item} · weapon` : item]), selectedItem)}</optgroup>`)).join('')}`;
+}
+
+// the starting gear of the new crew (p. 36): what the ship and edge allow, with empty slots to fill
+function renderStartingGearForm(draft, draftName) {
+  const rules = startingGearRules(draft.shipType, draft.edge);
+  const gear = store.sanitizedStartingGear(draft);
+  // plain "Crew N" like the rows above: typing a name does not re-render the form, so a name here would go stale
+  const names = ['Commander', ...Array.from({ length: draft.size }, (_, index) => `Crew ${index + 1}`)];
+  const baseSlotCount = STARTING_OTHER_EQUIPMENT + SHIP_TYPES[draft.shipType].extraStartingEquipment;
+  const weaponRows = names.map((name, index) => `<label>${escapeHtml(name)}'s weapon<select data-bind-ui="${draftName}.weapons.${index}">${gearPickerOptions(rules.weaponItems, gear.weapons[index])}</select></label>`).join('');
+  const otherRows = rules.otherSlots.map((slot, index) => `<label>${index < baseSlotCount ? `Piece ${index + 1}` : `${escapeHtml(draft.edge)} piece ${index - baseSlotCount + 1}`}<div class="row">
+      <select class="grow" aria-label="Piece ${index + 1}" data-bind-ui="${draftName}.otherItems.${index}">${gearPickerOptions(slot.items, gear.others[index].item)}</select>
+      <select aria-label="Piece ${index + 1} carried by" data-bind-ui="${draftName}.otherCarriers.${index}" data-number>${options(names.map((name, who) => [who, name]), gear.others[index].carrier)}</select>
+    </div></label>`).join('');
+  return `<h3>Starting gear</h3>
+    <p class="hint">One weapon each, ${rules.otherSlots.length} other pieces for the whole crew (p. 36), and a bonus piece for the commander (p. 32). Leave a slot empty to skip it; the crew starts fully equipped.</p>
+    ${weaponRows}${otherRows}
+    <label>Commander's bonus piece<select data-bind-ui="${draftName}.bonusItem">${gearPickerOptions(rules.bonusItems, gear.bonusItem)}</select></label>`;
+}
+
+// starting crews saved earlier: each campaign that uses one gets its own fresh copy
+function renderCrewTemplates() {
+  const templates = store.listCrewTemplates();
+  if (templates.length === 0) return '';
+  return `<section class="card form"><h2>Saved starting crews</h2>
+    <p class="hint">Fully geared and ready. Using one makes a fresh crew from it; what that crew earns later never changes the saved one.</p>
+    ${templates.map((template) => `<div class="template-row"><div class="grow"><b>${escapeHtml(template.name)}</b>
+        <small>${escapeHtml(template.draft.shipType)} ship · ${Number(template.draft.size) + 1} members · ${escapeHtml(template.draft.edge)}</small></div>
+      <button class="primary" data-action="useCrewTemplate" data-id="${escapeHtml(template.id)}">Use</button>
+      <button data-action="loadCrewTemplate" data-id="${escapeHtml(template.id)}">Adjust</button></div>`).join('')}
+    <p class="hint">Adjust loads one into the form below without changing the saved one. To change or delete saved crews: Settings → Starting crews.</p></section>`;
+}
+
+// The creator form, for a crew about to join the campaign (draftName 'newCrew') or for editing a saved starting crew in Settings
+// (draftName 'templateDraft'): the same form, so a starting crew is built exactly like a real one.
+function renderCrewForm({ draftName, isFirstCrew = false, isTemplate = false }) {
+  const draft = ui[draftName];
   const ship = SHIP_TYPES[draft.shipType];
   const crewTypeOptions = ship.crewTypes.map((type) => [type, CREW_TYPES[type].isAdvanced ? `${type} (advanced)` : type]);
   const memberSelects = newCrewMemberTypes(draft).map((type, index) => (
     `<label>Crew ${index + 1}<div class="row">
-      <input class="grow" placeholder="Name" aria-label="Crew ${index + 1} name" data-bind-ui="newCrew.memberNames.${index}" value="${escapeHtml(draft.memberNames[index])}">
-      <select aria-label="Crew ${index + 1} type" data-bind-ui="newCrew.memberTypes.${index}">${options(crewTypeOptions, type)}</select>
+      <input class="grow" placeholder="Name" aria-label="Crew ${index + 1} name" data-bind-ui="${draftName}.memberNames.${index}" value="${escapeHtml(draft.memberNames[index])}">
+      <select aria-label="Crew ${index + 1} type" data-bind-ui="${draftName}.memberTypes.${index}">${options(crewTypeOptions, type)}</select>
     </div></label>`
   )).join('');
   const pointsLeft = COMMANDER_FREE_STAT_POINTS - store.commanderPointsSpent(draft.commanderPoints);
   const commanderStat = (stat) => BASE_STATS_BY_CREW_SIZE[draft.size][stat] + (ship.commanderBonus[stat] ?? 0) + draft.commanderPoints[stat];
-  return `<section class="card form">
-    <h2>${isFirstCrew ? 'New crew' : 'Add a crew to the party'}</h2>
-    <p class="hint">Follow p. 24–39 of the rulebook. The app fills in stats and abilities; pick equipment on the roster afterwards.${isFirstCrew ? '' : ' The new crew travels with the others from the room you are in. Each crew needs its own secondary agenda.'}</p>
-    <label>Crew name<input data-bind-ui="newCrew.name" value="${escapeHtml(draft.name)}"></label>
-    <label>Crew size<select data-bind-ui="newCrew.size" data-rerender data-number>${options(Object.keys(BASE_STATS_BY_CREW_SIZE).map((size) => [size, `${size} + commander`]), draft.size)}</select></label>
-    <label>Ship type<select data-bind-ui="newCrew.shipType" data-rerender>${options(Object.keys(SHIP_TYPES).map((type) => [type, type]), draft.shipType)}</select></label>
-    <label>Edge (p. 34–36)<select data-bind-ui="newCrew.edge" data-rerender>${options(EDGES.map((edge) => [edge, edge]), draft.edge)}</select></label>
+  return `${isTemplate ? '' : renderCrewTemplates()}<section class="card form">
+    <h2>${isTemplate ? (ui.editingTemplateId === 'new' ? 'New starting crew' : 'Edit starting crew') : isFirstCrew ? 'New crew' : 'Add a crew to the party'}</h2>
+    <p class="hint">Follow p. 24–39 of the rulebook. The app fills in stats and abilities; choose the starting gear below.${isFirstCrew ? '' : ' The new crew travels with the others from the room you are in. Each crew needs its own secondary agenda.'}</p>
+    <label>Crew name<input data-bind-ui="${draftName}.name" value="${escapeHtml(draft.name)}"></label>
+    <label>Crew size<select data-bind-ui="${draftName}.size" data-rerender data-number>${options(Object.keys(BASE_STATS_BY_CREW_SIZE).map((size) => [size, `${size} + commander`]), draft.size)}</select></label>
+    <label>Ship type<select data-bind-ui="${draftName}.shipType" data-rerender>${options(Object.keys(SHIP_TYPES).map((type) => [type, type]), draft.shipType)}</select></label>
+    <label>Edge (p. 34–36)<select data-bind-ui="${draftName}.edge" data-rerender>${options(EDGES.map((edge) => [edge, edge]), draft.edge)}</select></label>
     ${renderEdgeNote(draft.edge)}
-    <label>Secondary agenda (optional, d12 on p. 39)<select data-bind-ui="newCrew.agenda">${options([['', 'None'], ...Object.entries(AGENDAS).map(([key, agenda]) => [key, agenda.name])], draft.agenda)}</select></label>
+    ${isTemplate ? '' : `<label>Secondary agenda (optional, d12 on p. 39)<select data-bind-ui="${draftName}.agenda">${options([['', 'None'], ...Object.entries(AGENDAS).map(([key, agenda]) => [key, agenda.name])], draft.agenda)}</select></label>`}
     <h3>Commander</h3>
-    <label>Commander name<input data-bind-ui="newCrew.commanderName" value="${escapeHtml(draft.commanderName)}"></label>
+    <label>Commander name<input data-bind-ui="${draftName}.commanderName" value="${escapeHtml(draft.commanderName)}"></label>
     <p class="hint">${escapeHtml(ship.commanderAbility)} (p. ${ABILITY_PAGES[ship.commanderAbility]}) · free stat points left: <b>${pointsLeft}</b> of ${COMMANDER_FREE_STAT_POINTS}</p>
     ${renderRuleNotes('abilities', ship.commanderAbility)}
-    <div class="stats">${STAT_KEYS.map((stat) => stepper(STAT_LABELS[stat], stat, commanderStat(stat), 'spendCommanderPoint')).join('')}</div>
+    <div class="stats">${STAT_KEYS.map((stat) => stepper(STAT_LABELS[stat], `${draftName}:${stat}`, commanderStat(stat), 'spendCommanderPoint')).join('')}</div>
     <h3>Crew</h3>
     <p class="hint">Who you may recruit, and how many of each: p. ${ship.page}. At most one advanced crew member.</p>
     ${memberSelects}
-    <button class="primary" data-action="createCrew">${isFirstCrew ? 'Enter the station' : 'Join the party'}</button>
-    ${isFirstCrew ? '' : '<button data-action="cancelAddingCrew">Cancel</button>'}
+    ${renderStartingGearForm(draft, draftName)}
+    ${isTemplate ? `<button class="primary" data-action="saveTemplateEdits">Save starting crew</button>
+    <button data-action="cancelTemplateEdit">Cancel</button>` : `<button class="primary" data-action="createCrew">${isFirstCrew ? 'Enter the station' : 'Join the party'}</button>
+    <button data-action="saveCrewTemplate">Save as a starting crew</button>
+    ${isFirstCrew ? '' : '<button data-action="cancelAddingCrew">Cancel</button>'}`}
   </section>`;
 }
 
@@ -734,8 +787,25 @@ function renderSyncCard() {
   return `<section class="card form"><h2>Sync</h2>${body}</section>`;
 }
 
+// Settings → Starting crews: the saved crews, made and changed here whatever campaign is running
+function renderStartingCrewsSettings() {
+  if (ui.editingTemplateId) return renderCrewForm({ draftName: 'templateDraft', isTemplate: true });
+  const templates = store.listCrewTemplates();
+  return `<section class="card form"><h2>Starting crews</h2>
+    <p class="hint">Crews built once, fully geared as the book allows (p. 24–39), to use in any campaign: you always get a fresh copy, and what a crew earns later never changes the saved one. They sync with your saves.</p>
+    ${templates.length ? templates.map((template) => `<div class="template-row"><div class="grow"><b>${escapeHtml(template.name)}</b>
+        <small>${escapeHtml(template.draft.shipType)} ship · ${Number(template.draft.size) + 1} members · ${escapeHtml(template.draft.edge)}</small></div>
+      <button data-action="editStartingCrew" data-id="${escapeHtml(template.id)}">Edit</button>
+      ${confirmButton('deleteCrewTemplate', 'Delete', `data-id="${escapeHtml(template.id)}"`)}</div>`).join('') : '<p class="hint">None saved yet.</p>'}
+    <button class="primary" data-action="newStartingCrew">+ New starting crew</button></section>`;
+}
+
 function renderSettings() {
-  return `${renderSyncCard()}
+  const sections = [['general', 'General'], ['starting-crews', 'Starting crews']];
+  const sectionButtons = `<div class="subtabs" role="tablist">${sections.map(([key, label]) => (
+    `<button role="tab" aria-selected="${ui.settingsSection === key}" class="${ui.settingsSection === key ? 'active' : ''}" data-action="showSettingsSection" data-section="${key}">${label}</button>`)).join('')}</div>`;
+  if (ui.settingsSection === 'starting-crews') return `${sectionButtons}${renderStartingCrewsSettings()}`;
+  return `${sectionButtons}${renderSyncCard()}
     <section class="card form"><h2>Party</h2>
       ${state.run ? `<p class="hint">Retiring archives the whole party (every crew) and lets a new one set out. Agenda progress and station legacy are kept.</p>${confirmButton('retireParty', 'Retire the party')}` : '<p class="hint">No crew aboard.</p>'}
     </section>
@@ -820,20 +890,48 @@ const actions = {
   step: ({ path, delta }) => { setAtPath(state, path, Math.max(0, getAtPath(state, path) + Number(delta))); },
   stepUi: ({ path, delta }) => { setAtPath(ui, path, Math.max(1, getAtPath(ui, path) + Number(delta))); },
 
-  spendCommanderPoint: ({ path: stat, delta }) => {
-    const points = ui.newCrew.commanderPoints;
+  spendCommanderPoint: ({ path, delta }) => {
+    const [draftName, stat] = path.split(':');
+    const points = ui[draftName].commanderPoints;
     const newValue = points[stat] + Number(delta);
     if (newValue < 0) return;
     if (store.commanderPointsSpent(points) + Number(delta) > COMMANDER_FREE_STAT_POINTS) throw new Error(`All ${COMMANDER_FREE_STAT_POINTS} free points are spent.`);
     points[stat] = newValue;
   },
-  createCrew: () => {
-    store.addCrew(state, { ...ui.newCrew, memberTypes: newCrewMemberTypes(ui.newCrew) });
-    // the next crew starts from a clean form
-    Object.assign(ui.newCrew, { name: '', commanderName: '', agenda: '', commanderPoints: store.zeroStats(), memberNames: Array(8).fill('') });
-    ui.isAddingCrew = false;
-    ui.tab = 'crew';
+  createCrew: () => { createCrewFromForm(); },
+  // a template is only a recipe: the form takes a copy, so nothing a crew earns can reach it
+  useCrewTemplate: ({ id }) => { loadTemplateIntoForm(id); createCrewFromForm(); },
+  loadCrewTemplate: ({ id }) => {
+    loadTemplateIntoForm(id);
+    ui.noticeMessage = `Loaded "${ui.newCrew.name}": change what you like, then enter the station. The saved one stays as it was.`;
   },
+  saveCrewTemplate: () => {
+    // the secondary agenda is rolled per campaign, so it is not part of a starting crew
+    const { agenda, ...recipe } = structuredClone(ui.newCrew);
+    const { replaced } = store.saveCrewTemplate({ ...recipe, memberTypes: newCrewMemberTypes(ui.newCrew) });
+    ui.noticeMessage = `${replaced ? 'Updated' : 'Saved'} the starting crew "${recipe.name.trim()}". Use it from the Saved starting crews list for any campaign.`;
+  },
+  deleteCrewTemplate: ({ id }) => { store.deleteCrewTemplate(id); ui.noticeMessage = 'Deleted the saved starting crew.'; },
+  // Settings → Starting crews: made and edited without touching the running campaign
+  showSettingsSection: ({ section }) => { ui.settingsSection = section; },
+  newStartingCrew: () => {
+    ui.templateDraft = { size: 6, shipType: 'Exploration', edge: EDGES[0], memberTypes: Array(8).fill('Soldier'), ...blankCrewFormFields() };
+    ui.editingTemplateId = 'new';
+  },
+  editStartingCrew: ({ id }) => {
+    const template = store.listCrewTemplates().find((candidate) => candidate.id === id);
+    if (!template) throw new Error('That saved starting crew no longer exists.');
+    ui.templateDraft = { ...blankCrewFormFields(), ...structuredClone(template.draft) };
+    ui.editingTemplateId = id;
+  },
+  saveTemplateEdits: () => {
+    const { agenda, ...recipe } = structuredClone(ui.templateDraft);
+    const { replaced } = store.saveCrewTemplate({ ...recipe, memberTypes: newCrewMemberTypes(ui.templateDraft) }, ui.editingTemplateId === 'new' ? null : ui.editingTemplateId);
+    ui.noticeMessage = `${replaced ? 'Updated' : 'Saved'} the starting crew "${recipe.name.trim()}".`;
+    ui.editingTemplateId = null;
+    ui.templateDraft = null;
+  },
+  cancelTemplateEdit: () => { ui.editingTemplateId = null; ui.templateDraft = null; },
   startAddingCrew: () => { ui.isAddingCrew = true; },
   cancelAddingCrew: () => { ui.isAddingCrew = false; },
   removeCrew: ({ crewId }) => { store.removeCrew(state, crewId); ui.postGame = null; },
@@ -1023,6 +1121,20 @@ function handleClick(event) {
     ui.errorMessage = error.message;
   }
   render();
+}
+
+function createCrewFromForm() {
+  store.addCrew(state, { ...ui.newCrew, memberTypes: newCrewMemberTypes(ui.newCrew) });
+  // the next crew starts from a clean form
+  Object.assign(ui.newCrew, blankCrewFormFields());
+  ui.isAddingCrew = false;
+  ui.tab = 'crew';
+}
+
+function loadTemplateIntoForm(id) {
+  const template = store.listCrewTemplates().find((candidate) => candidate.id === id);
+  if (!template) throw new Error('That saved starting crew no longer exists.');
+  Object.assign(ui.newCrew, blankCrewFormFields(), structuredClone(template.draft));
 }
 
 function applyInput(element) {

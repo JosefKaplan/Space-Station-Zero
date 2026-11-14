@@ -99,7 +99,8 @@ loads as "Playthrough 1" and is rewritten on the first change.
 
 ```text
 // the saved store (shape sketch, not runnable code)
-{ schemaVersion: 6, activeId, playthroughs: [{ id, name /* unique, 1-40 chars */, state /* the shape below */ }] }
+{ schemaVersion: 7, activeId, playthroughs: [{ id, name /* unique, 1-40 chars */, state /* the shape below */ }],
+  crewTemplates: [{ id, name, draft /* the creator form as saved */ }], crewTemplatesUpdatedAt }
 
 // one playthrough's state (its own schemaVersion is 6; 5 had a single `run.crew`)
 {
@@ -279,3 +280,19 @@ Saves can mirror to the owner's own Supabase project (`js/cloud-sync.js`, setup 
 - The first-time authenticator QR is drawn in the app (`js/qr.js`: a dependency-free QR encoder, byte mode, level M,
   versions 1-10) from the `otpauth://` link Supabase returns; the secret and the link are shown as text too. Verified by
   decoding the generated codes with the browser's `BarcodeDetector`.
+
+## 12. Saved starting crews
+
+- **What they are.** A saved starting crew is the creator's form as it was when saved: name, size, ship, edge, commander
+  (name and free points), crew types and names, and the starting gear (p. 36: one weapon each, the other pieces for the
+  whole crew with who carries them, the commander's bonus piece). It is a recipe, not a live crew: the secondary agenda is
+  not part of it, and nothing a campaign's crew earns (XP, boosts, equipment) ever reaches it. Using one makes a fresh
+  crew with its own ids, 0 XP and the gear already on the roster; the list lives in the store, so every playthrough sees it.
+- **Where they are managed.** Settings → Starting crews: create, edit (the same form as the crew builder, without the secondary
+  agenda), rename (not to another one's name) and delete, independent of the running campaign. The Crew tab lists them to use
+  or adjust when a crew is being made; adjusting never changes the saved one.
+- **Gear rules** are data (`startingGearRules` in `js/data.js`): the pieces a ship's categories allow, `STARTING_OTHER_EQUIPMENT`
+  plus the ship's extra pieces, an edge that adds more (Smugglers), and Advanced Technology for the commander's bonus.
+  `sanitizedStartingGear` in `js/state.js` drops anything the current ship and edge do not allow.
+- **Syncing.** The list travels as one extra row (id `crew-templates`) in the same cloud table as the playthroughs;
+  newest change wins, like a playthrough.
