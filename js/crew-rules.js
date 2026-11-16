@@ -24,6 +24,11 @@ function parseCrewRules(text) {
   for (const [key, entry] of Object.entries(rules.skirmishes)) {
     if (typeof entry?.lore !== 'string' || !Array.isArray(entry.sections)) throw new Error(`skirmishes.${key} needs "lore" and "sections"`);
   }
+  // the enemy action list (optional: older files have none): { intro, steps: [text] }
+  rules.enemyAi ??= null;
+  if (rules.enemyAi !== null && (typeof rules.enemyAi.intro !== 'string' || !Array.isArray(rules.enemyAi.steps) || !rules.enemyAi.steps.every((step) => typeof step === 'string' && step))) {
+    throw new Error('enemyAi needs "intro" and "steps" (a list of texts)');
+  }
   for (const [name, item] of Object.entries(rules.equipment)) {
     if (typeof item?.text !== 'string' || !item.text || typeof item.tags !== 'string') throw new Error(`equipment.${name} needs "tags" and "text"`);
   }

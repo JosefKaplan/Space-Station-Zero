@@ -234,7 +234,8 @@ Room layouts (`js/room-layouts.js`, optional): the room's own footprint comes fr
 1. `data.js` from `campaign-data.md`; `state.js` with save/load/export/import.
 2. Crew tab: create crew, roster cards, damage/XP steppers.
 3. Journey tab: current room, exits, roll, backtrack, No Return.
-4. Post-game dialog: injuries → XP → agenda → exit; auto log entries.
+4. Post-game dialog: injuries → XP → agenda → exit; auto log entries. Opening it ticks everyone who went down in the room (marked out of
+   action in the turn tracker, or at 0 Life); "Roll 2d12 for all" rolls for each ticked member who has no roll yet.
 5. Log tab + Markdown export; station layer (new crew keeps legacy).
 6. Dice tab; visual polish (dark, terminal-ish), phone check.
 7. Enable GitHub Pages.
@@ -354,3 +355,169 @@ of the last online visit, which were all fetched together. It never touches anot
 a new module should be added there, but forgetting it is harmless (it is kept the first time it loads). The header shows an "offline"
 chip when the browser reports no connection. Saves were always in `localStorage`, so editing offline needs nothing else; the sync
 (`js/cloud-sync.js`) simply waits for the connection.
+
+## 16. Turn tracker
+
+Source: p. 13–15 (activation and the roll to keep the initiative) and p. 42 (enemy AI). A card at the top of a room being played
+(`renderTurnTracker`, logic in `js/turns.js`, state in `run.roomSetup.turns`, so it is saved, synced and reset for every room;
+state `schemaVersion` 12).
+
+- **The turn.** The crew has the first activation. After each activation the side rolls a d12 to keep the initiative: 6+ after its
+  1st activation, 10+ after the 2nd, 12+ after every later one (the book's example of play calls the first roll "6+"). A failed roll
+  passes the initiative to the other side; the turn is over when everyone, crew and enemies, has activated once. Both sides use the
+  same numbers (enemies roll "as normal", p. 42).
+- **What the card does.** Chips for every crew member able to play (all crews of a party together): tap = activated, ✕ = out of action.
+  It shows who has the initiative, the number the next roll needs, a roll button (or "rolled it: kept / lost" for rolls made by hand,
+  also for abilities that keep the initiative without a roll), the enemies (§ 17), "Enemies are done" (tap again to take it back),
+  and a button for the next turn. A room's time limit (`turnLimit`) shows as a chip and turns to a warning on the last turn.
+- **Enemy AI.** While the enemies have the initiative, the card shows the book's enemy action list (p. 42). Its wording is the book's, so
+  it is not in the repo: it comes from the private `local/crew-rules.json` (`enemyAi`, made by `local/extract-crew-rules.py`, copied by
+  "Copy room texts to my database"). Without it the card only points at p. 42 and p. 22.
+- **Where the book is silent: the initiative coming back.** The book gives the roll numbers only for a run of activations and says
+  a failed roll passes the initiative; it does not say what the numbers do when the initiative returns. Decided by the owner:
+  **the count starts again every time a side gets the initiative back.** The first activation of the new run is free (the book
+  never asks for a roll to take the initiative back), and the roll after it needs 6+ again, then 10+, then 12+. The tracker keeps
+  that count in `turns.run`. The other reading (the count carries across the whole turn: the 3rd crew activation always needs 12+)
+  was the first version of the tracker and was dropped.
+- **No roll when it would mean nothing.** A side with nobody left hands the initiative on without a roll, and nobody rolls when the
+  other side has nobody left to take it (every enemy has gone or is out of action): the side just goes on. This is the app's reading
+  of "the turn is over when everyone has activated once": a failed roll could not take anything away.
+- **Not covered.** Skirmish (versus) matches, and abilities that change the roll (only "kept by hand" is offered; "Determined Leader"
+  (p. 41, once per challenge) and the other once-per-X abilities are marked as used in § 19).
+
+## 17. The room's enemies
+
+Source: p. 12 and p. 21 (Life, damage, out of action), p. 22 (hidden enemies activate last), p. 42 (enemy AI). The enemies of the
+room being played, each with its Life (`js/enemies.js`, pure; state in `run.roomSetup.enemies`, saved and synced with the room, empty
+for every new room; state `schemaVersion` 12; schema 8 saves get an empty list, schema 9 ones no Combat stat).
+
+- **The list.** `[{ id, name, number, life, damage, armor, combat, isHidden }]` (`combat` is the Combat stat, null when unknown). `life` is the Life stat, `damage` the Life lost; at
+  `damage >= life` the enemy is out of action and removed from play. Models of one kind are numbered ("Drone #2"); a single one is not.
+- **Where it comes from.** When the crew begins a challenge, the list is built from the room's briefing and stat bars, which are the
+  owner's private room text (`js/room-layouts.js`, only there): each group's size ("per crew" times the crews taking part, or a plain
+  number) and the stat bar of the same kind, the solo or co-op bar to match the party. Hidden enemies come last. Groups that come
+  later (the briefing gives a condition for them) are offered as "Add N× …" buttons, and groups without a number or a stat
+  bar are named under the list to be added by hand. Without the private text (GitHub Pages before signing in) the list is empty
+  and enemies are added by hand (name and Life); the tracker then falls back to counting the enemies' activations.
+  Going back to the set-up and in again keeps the list and its damage.
+- **In the tracker.** Each row is the enemy's chip: tap = activated (like a crew chip), Life as `2/3` with tappable pips (up to 12 Life;
+  tap a pip to set the Life, the last full pip again takes it away) and −1 / +1 buttons (−5 as well above 12 Life: the large ones).
+  Armor is shown on the row. An enemy that is out stops needing an activation; when the last one to go is put down, the enemies' side
+  of the turn is over and the initiative moves on without a roll (§ 16).
+- **Scaling with the crews.** A group's size is its per-crew number times the crews taking part (a crew counts when someone in it can play
+  the room), and the solo or co-op stat bar is chosen to match. The list is built once, when the challenge begins: after another crew
+  joins, clear it and list the enemies again.
+- **Not covered.** An enemy's stats beyond Life, armor and Combat are in the room's stat table above the list. The attack and the
+  defence against it are § 18.
+
+## 18. Combat calculator
+
+Source: p. 17 (criticals), p. 20–21 (combat steps), p. 22 (cover). A button in the room card opens it (`renderCombat`, rules in
+`js/combat.js`, pure; the choices live only in the screen, nothing about it is saved). One exchange at a time:
+
+- **Choose** an attacker and a defender: a crew member, an enemy standing on the list (§ 17), or "someone else" whose dice you set by
+  hand; Close (within 1") or Ranged; cover for the defender (Ranged only); swap the two to let an enemy hit back.
+- **The dice.** Attacker: Combat + the weapon's bonus dice + any extra dice. Defender: Combat (+ extra; a weapon's dice do not count in
+  defence, except for the one weapon that says it does). A crew member's weapon is read from their equipment text (`carriedWeapons`),
+  an enemy's Combat and armor from the list. The Armor stepper starts at the defender's armor (an Armored Jacket, or the enemy's
+  stat bar); other armor, and armor with a condition, is set by hand.
+- **The steps.** The attacker counts even results that reach the defender's armor (armor is the target number; none: every even
+  result); the defender counts every even result; more successes for the attacker: the difference is the damage; equal: nothing; more
+  for the defender: the attacker takes the difference in a Close attack, nothing in a Ranged one. Two or more 12s double a roll's
+  successes, two or more 1s fail it, unless it also has two 12s. The Dice tab uses the same scoring (`scorePool`).
+- **Cover** raises the armor by 2 against a Ranged attack; without armor that is 4+ (p. 22). A Close attack ignores cover. A weapon
+  that ignores armor (the Energy Melee Weapon) sets the target aside.
+- **Roll or type.** "Roll both" rolls the dice; "I rolled my own dice" takes the results typed in (the table's real dice) and scores
+  them the same way.
+- **Apply.** The damage goes to whoever it hurt in one tap, once: an enemy loses Life (and drops out of the turn at 0), a crew
+  member's damage goes up (capped at their Life) and at 0 Life they are marked out of action in the turn tracker. Roll on the injury
+  table after the challenge as usual.
+- **The weapon table** (`WEAPON_PROFILES` in `js/data.js`) holds numbers only: bonus dice, Close or Ranged, and two flags. It is the one
+  place the calculator needs the book's gear numbers; names and numbers, no rule text.
+- **Not covered.** Abilities that change a roll (extra dice from an ability, re-rolls) are typed in as extra dice; armor that works
+  only against some attacks; area attacks; damage that is not combat (saves, falls).
+
+## 19. Preparation and once-per-X abilities
+
+Source: p. 32 (Weapon Tuning), p. 33 (Armor Tuning), and the ability, edge and equipment entries that limit their use. Two parts.
+
+**Before the challenge: tunings** (`js/preparation.js`, pure; state `run.roomSetup.tunings`, new for every room, state `schemaVersion` 12).
+A card "Before you begin" in the set-up screen, above "Begin challenge".
+- **Weapon Tuning** (Engineer, Chief Engineer): each one taking part picks one weapon, which adds 1 die more for this challenge.
+  **Armor Tuning** (Scientist, Lead Scientist): each one picks one piece of armor, whose armor value goes up by 2 for this challenge.
+- **Decided by the owner:** only members taking part can tune (not one sitting out); any crew's weapon or armor in the party may be
+  tuned (co-op included); armor with a plain value (the Armored Jacket) is counted in the calculator by itself, the other armor
+  (Chem-Protection Suit, Ablative Shields, which work only against some attacks or in another way) is tuned too but its value is raised by hand.
+- **Rules of the list.** `[{ kind, tunerId, carrierId, item }]`: one tuning per tuner, and the same piece cannot be tuned twice (two
+  Sidearms carried by two crew members are two weapons). Once the challenge has begun the tunings stand, even if the tuner goes down.
+  A tuned Heavy Melee Weapon (it adds its dice to its wearer's defence too) is +1 there as well.
+- **Effects.** The room card shows what is tuned; the combat calculator adds the die to the weapon (in the list of weapons and in the
+  dice line, as "weapon, tuned") and the 2 to the defender's armor value, and notes armor it cannot add up by itself.
+- Removing a crew member or a crew also removes them from the tunings and the turn tracker (a save that still named them was refused as damaged).
+
+**During the challenge: once per turn / challenge / game** (`js/limited-use.js`, pure; names and frequency in `LIMITED_USE` in `js/data.js`).
+Chips under the crew in the turn tracker, grouped by how often, for the members taking part and the crews' edges: Combat Specialist,
+Hive Mind, Time Masters, Chemically Enhanced, Logistics Expert, Sneaky Scoundrel and the Drone System (per turn); Bypass, Emergency
+Med-Patch and Determined Leader (per challenge); Survival Specialist (per game). A chip is found by the name appearing in the member's
+abilities or equipment text (or being the crew's edge). Tap = used (struck out), tap again to take it back.
+Marks: once per turn in `turns.used` (a new turn clears it), once per challenge in `roomSetup.used` (a new room clears it), once per game in
+`run.usedForGame` (the whole run). Only names and frequencies are in the code; what each does is in the book and the private notes.
+
+**Also at the start of a challenge** (§ 20): the Stim-Shot (used up, +2 Life and Move for the room) and the choice of a Shielding or a
+Targeting Drone for each Drone System, in the same card. **Not covered.** Suggesting who should make the Hidden-enemy spotting test
+(p. 22); Time Masters and similar abilities that change the rules are only marked, not applied.
+
+## 20. Equipment, item by item
+
+Source: p. 36–38 (all equipment), p. 24–31 (what each ship may take), p. 34 (Armored Force, Smugglers). Audited against the book's text:
+names, categories, pages, which ship takes which category, the starting allowance (one weapon each, three other pieces, the Pirate's two,
+the commander's bonus piece, the Smugglers' three) and every item's numbers. What each piece does is in the book (p. 36–38) and the private notes, not here. Equipment is free text on each member (one piece per line); a
+piece counts when its name is in it (`carriedItems` in `js/gear.js`: longer names first, so a Hyper-Scanner is not also a Scanner). The numbers
+are in `js/data.js` (`WEAPON_PROFILES`, `ARMOR_ITEMS`, `EQUIPMENT_EFFECTS`, `TEST_KINDS`, `STIM_SHOT`, `MED_PATCH`, `DRONES`); no rule wording.
+
+| Piece | Numbers it uses (`js/data.js`) | Where the app uses it |
+|---|---|---|
+| Scanner | `testDice.spotHidden` 1 | Dice tab, "Test for a crew member" |
+| Medi-Bag | `testDice.medicalAttention` 2 | the same |
+| Sidearm | Ranged, 2 dice | combat calculator |
+| Melee Weapon | Close, 2 dice | combat calculator |
+| Armored Jacket | armor 4 | combat calculator (defender's armor) |
+| Antitoxin | `testDice.lifeVsChemical` 2 | test roller |
+| Stabilization Module | no number: one reroll per module carried | after the challenge: "Reroll (Stabilization Module)", once per roll |
+| Hazard Suit | `testDice.life` 1 | test roller |
+| Emergency Med-Patch | `MED_PATCH.heal` 3, once per challenge | tracker: pick who, "Heal" |
+| Stim-Shot | `STIM_SHOT.stat` Life 2, Move 2; single use | "Before you begin" or the tracker: used up, Life and Move +2 in the room |
+| Energy Melee Weapon | Close, 3 dice, `ignoresArmor` | combat calculator |
+| Energy Missile Weapon | Ranged, 3 dice | combat calculator |
+| Heavy Kinetic Missile Weapon | Ranged, 3 dice, `isKinetic` | combat calculator (Kinetic matters for Ablative Shields) |
+| Heavy Melee Weapon | Close, 3 dice, `isKinetic`, `addsToDefense` | combat calculator |
+| Hyper-Scanner | `testDice.reaction` 2 | test roller |
+| Chem-Protection Suit | `chemicalDamageCut` 2, no armor value | a note on a Life test against a Chemical; tuned by hand |
+| Advanced Tech Kit | `testDice.alienTech` 3 | test roller |
+| Mini-Lab Kit | `testDice.intelligence` 1 | test roller |
+| Ablative Shields | armor 8, `onlyAgainst` rangedKinetic | calculator: counted only for a Ranged Kinetic attack |
+| Jump Boots | `stat.mv` 2, `flies` | Move shown with the boost on the Crew tab |
+| Drone System | Shielding: `stopsUpTo` 4; Targeting: `bonusDice` 2 beyond 3" | drone chosen per challenge in the set-up; the calculator offers the shield on the result and the dice on a far target |
+| Point-to-Point Teleporter | none | not modelled (movement is played on the table) |
+| Heads-Up Display | `statOnTest.spotHidden.re` 2, `extraDieOnTest` reaction | test roller: the stat, the extra die rolled and the worst one discarded |
+| Armored Force (edge) | Power Armor, armor 6 | calculator: armor 6 for the crew; Power Armor can be tuned like any armor |
+
+**Fixed in this audit** (the app did less or something else before): Armored Force armor, Ablative Shields' condition, a Ranged attack
+needing a weapon without the Close keyword (a crew member with none, or a Close-only one, attacks within 1"), Jump Boots' Move, the eight pieces
+that add dice to tests (they were only notes), the Med-Patch healing, the Drone System, the Stabilization Module's reroll, the Stim-Shot,
+and the four item notes in `local/crew-rules.json` that ran on into the next section's heading (`local/extract-crew-rules.py`).
+
+**Checked and right:** the names and pages of the five categories, each ship's categories (Medical: General and Medical; Science: General
+and Scientific Gear; War: General and Advanced Weaponry; Shipping: all; Pirate: all but Advanced Technology, and two more pieces; Exploration:
+General, Medical and Scientific), the allowance of one weapon per crew member and three other pieces, the commander's bonus piece from the
+ship's lists or Advanced Technology, the Smugglers' three extra pieces of Advanced Weaponry or Advanced Technology, the weapon numbers.
+
+**Decided where the book is silent** (say if one should change): the three "other pieces" may be weapons as well (the book says "other
+pieces", and the Smugglers' extras are weapons); the drone is chosen for each challenge (the book does not say when); a Stim-Shot can be used
+at any time in the room and taken back for a slip; only one Stim-Shot works for a member in a room; each Stabilization Module gives one reroll
+and a rerolled roll is not rerolled again; the Heads-Up Display's discard is made by the app (the worst die, a failure and a 1 first); the
+Shielding Drone also stops damage a Close attack turns back on its user.
+
+**How it works.** A Stim-Shot is used with `useStimShot` (state.js): the piece leaves the member's equipment and the member is listed in
+`run.roomSetup.stimmed`; their Life and Move are shown, and used for out of action, 2 higher (`effectiveStat`) until the room is left, which clears the list
+(everyone is healed after a challenge anyway). The drone choices are in `run.roomSetup.drones`. State `schemaVersion` 12.

@@ -2,13 +2,17 @@
 import {
   ABILITY_PAGES, AGENDAS, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_ADVANCEMENTS, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, CREW_ADVANCEMENTS, CREW_TYPES, INJURY_ROLL_MAX, INJURY_ROLL_MIN, MAX_LEGACY_COUNT,
-  SHIP_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_TURNS, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, equipmentLine, injuryOutcomeForRoll,
+  DRONES, MED_PATCH, SHIP_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_TURNS, STARTING_CHALLENGE, STAT_KEYS, XP_PER_SURVIVED_CHALLENGE, equipmentLine, injuryOutcomeForRoll,
   startingGearRules,
 } from './data.js';
 import { isValidTerrain } from './terrain.js';
+import { MAX_ENEMY_LIFE } from './enemies.js';
+import * as gear from './gear.js';
+import * as limitedUse from './limited-use.js';
+import { newTurns } from './turns.js';
 
 export const STORAGE_KEY = 'ssz-captains-log';
-const SCHEMA_VERSION = 7;   // of one playthrough's state (station + run + versus)
+const SCHEMA_VERSION = 12;   // of one playthrough's state (station + run + versus)
 const STORE_VERSION = 7;    // of what is saved: a list of named playthroughs and the saved starting crews
 const MAX_PLAYTHROUGH_NAME_LENGTH = 40;
 export const MAX_CREWS = 4;   // crews travelling together in one playthrough
@@ -85,6 +89,50 @@ function migrateFromVersion6(saved) {
   saved.schemaVersion = 7;
 }
 
+// 7 had no turn tracker in the room set-up
+function migrateFromVersion7(saved) {
+  if (saved.run) saved.run.roomSetup.turns = newTurns();
+  saved.schemaVersion = 8;
+}
+
+// 8 had no list of the room's enemies; its turn tracker counted the initiative by crew member and had no run count
+function migrateFromVersion8(saved) {
+  if (saved.run) {
+    const { roomSetup } = saved.run;
+    roomSetup.enemies = [];
+    roomSetup.turns.enemyDoneIds = [];
+    // the best guess: the activations the side holding the initiative has had this turn
+    roomSetup.turns.run = roomSetup.turns.side === 'crew' ? roomSetup.turns.doneIds.length : roomSetup.turns.enemyActivations;
+  }
+  saved.schemaVersion = 9;
+}
+
+// 9 listed enemies without their Combat stat
+function migrateFromVersion9(saved) {
+  if (saved.run) for (const enemy of saved.run.roomSetup.enemies) enemy.combat = null;
+  saved.schemaVersion = 10;
+}
+
+// 10 had no tunings, no once-per-turn / challenge / game marks
+function migrateFromVersion10(saved) {
+  if (saved.run) {
+    saved.run.usedForGame = [];
+    saved.run.roomSetup.tunings = [];
+    saved.run.roomSetup.used = [];
+    saved.run.roomSetup.turns.used = [];
+  }
+  saved.schemaVersion = 11;
+}
+
+// 11 had no Stim-Shots used and no drones chosen in the room
+function migrateFromVersion11(saved) {
+  if (saved.run) {
+    saved.run.roomSetup.stimmed = [];
+    saved.run.roomSetup.drones = {};
+  }
+  saved.schemaVersion = 12;
+}
+
 function requireValid(condition, what) {
   if (!condition) throw new Error(`Save data is damaged: ${what}.`);
 }
@@ -94,7 +142,31 @@ const isCount = (value) => Number.isInteger(value) && value >= 0;
 const isChallengeNumber = (value) => Number.isInteger(value) && value in CHALLENGES;
 const isChallengeList = (value) => Array.isArray(value) && value.every(isChallengeNumber);
 
-// A save that passes here can be rendered without crashing, and holds nothing but plain text and numbers.
+function assertValidEnemies(enemies) {
+  requireValid(Array.isArray(enemies) && enemies.every((enemy) => isPlainObject(enemy)
+    && typeof enemy.id === 'string' && enemy.id !== '' && typeof enemy.name === 'string' && typeof enemy.armor === 'string'
+    && typeof enemy.isHidden === 'boolean' && isCount(enemy.number) && isCount(enemy.damage) && (enemy.combat === null || isCount(enemy.combat))
+    && Number.isInteger(enemy.life) && enemy.life >= 1 && enemy.life <= MAX_ENEMY_LIFE && enemy.damage <= enemy.life)
+    && new Set(enemies.map((enemy) => enemy.id)).size === enemies.length, 'enemies of the room');
+}
+
+const isStringList = (value) => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
+function assertValidTunings(tunings, memberIds) {
+  requireValid(Array.isArray(tunings) && tunings.every((tuning) => isPlainObject(tuning) && ['weapon', 'armor'].includes(tuning.kind)
+    && memberIds.has(tuning.tunerId) && memberIds.has(tuning.carrierId) && typeof tuning.item === 'string'), 'tunings');
+}
+
+function assertValidTurns(turns, memberIds, enemyIds) {
+  requireValid(isPlainObject(turns) && Number.isInteger(turns.turn) && turns.turn >= 1 && ['crew', 'enemy'].includes(turns.side)
+    && Array.isArray(turns.doneIds) && turns.doneIds.every((id) => memberIds.has(id))
+    && Array.isArray(turns.outIds) && turns.outIds.every((id) => memberIds.has(id))
+    && Array.isArray(turns.enemyDoneIds) && turns.enemyDoneIds.every((id) => enemyIds.has(id))
+    && isCount(turns.enemyActivations) && isCount(turns.run) && typeof turns.enemiesDone === 'boolean' && typeof turns.awaitingRoll === 'boolean'
+    && isStringList(turns.used)
+    && (turns.lastRoll === null || isPlainObject(turns.lastRoll)), 'turn tracker');
+}
+
 function assertValidVersus(versus) {
   requireValid(isPlainObject(versus) && Array.isArray(versus.history) && versus.history.every((record) => isPlainObject(record)
     && record.challengeKey in SKIRMISH_CHALLENGES && Array.isArray(record.players) && Array.isArray(record.winners)), 'versus history');
@@ -112,6 +184,7 @@ function assertValidVersus(versus) {
   requireValid(match.terrain === null || isValidTerrain(match.terrain), 'versus terrain');
 }
 
+// A save that passes here can be rendered without crashing, and holds nothing but plain text and numbers.
 function assertValidState(saved) {
   const { station, run } = saved;
   requireValid(isPlainObject(station), 'station is missing');
@@ -153,13 +226,19 @@ function assertValidState(saved) {
   requireValid([null, 'lost', 'victory'].includes(run.ended), 'campaign ending');
   requireValid(isPlainObject(run.roomSetup) && typeof run.roomSetup.isMissionStarted === 'boolean'
     && (run.roomSetup.terrain === null || isValidTerrain(run.roomSetup.terrain)), 'room set-up');
+  assertValidEnemies(run.roomSetup.enemies);
+  assertValidTunings(run.roomSetup.tunings, memberIds);
+  requireValid(Array.isArray(run.roomSetup.stimmed) && run.roomSetup.stimmed.every((id) => memberIds.has(id)), 'used Stim-Shots');
+  requireValid(isPlainObject(run.roomSetup.drones) && Object.entries(run.roomSetup.drones).every(([id, choice]) => memberIds.has(id) && choice in DRONES), 'drones');
+  requireValid(isStringList(run.roomSetup.used) && isStringList(run.usedForGame), 'used abilities');
+  assertValidTurns(run.roomSetup.turns, memberIds, new Set(run.roomSetup.enemies.map((enemy) => enemy.id)));
   requireValid(Array.isArray(run.log) && run.log.every((entry) => isPlainObject(entry) && isChallengeNumber(entry.challenge)
     && typeof entry.at === 'string' && typeof entry.text === 'string' && typeof entry.isNote === 'boolean'), 'log');
 }
 
 // one playthrough's state, brought up to the current version and checked
 function migratedState(saved) {
-  if (!isPlainObject(saved) || ![1, 2, 3, 4, 5, 6, SCHEMA_VERSION].includes(saved.schemaVersion)) {
+  if (!isPlainObject(saved) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION].includes(saved.schemaVersion)) {
     throw new Error(`Not a Captain's Log save, or an unsupported version (schemaVersion: ${saved?.schemaVersion}).`);
   }
   if (saved.schemaVersion === 1) migrateFromVersion1(saved);
@@ -168,6 +247,11 @@ function migratedState(saved) {
   if (saved.schemaVersion === 4) migrateFromVersion4(saved);
   if (saved.schemaVersion === 5) migrateFromVersion5(saved);
   if (saved.schemaVersion === 6) migrateFromVersion6(saved);
+  if (saved.schemaVersion === 7) migrateFromVersion7(saved);
+  if (saved.schemaVersion === 8) migrateFromVersion8(saved);
+  if (saved.schemaVersion === 9) migrateFromVersion9(saved);
+  if (saved.schemaVersion === 10) migrateFromVersion10(saved);
+  if (saved.schemaVersion === 11) migrateFromVersion11(saved);
   assertValidState(saved);
   return saved;
 }
@@ -490,9 +574,9 @@ export function visitedChallenges(run) {
   return isCurrentChallengeCleared(run) ? run.cleared : [...run.cleared, run.currentChallenge];
 }
 
-// every room starts with the table still to be laid out
+// every room starts with the table still to be laid out, no enemy listed and turn 1 to play
 function newRoomSetup() {
-  return { isMissionStarted: false, terrain: null };
+  return { isMissionStarted: false, terrain: null, enemies: [], tunings: [], used: [], stimmed: [], drones: {}, turns: newTurns() };
 }
 
 function newId() {
@@ -583,9 +667,57 @@ export function addCrew(state, { name, size, shipType, edge, agenda, commanderNa
   state.run = {
     crews: [crew],
     currentChallenge: STARTING_CHALLENGE, route: [STARTING_CHALLENGE], cleared: [], sealed: [], log: [], ended: null,
-    roomSetup: newRoomSetup(),
+    usedForGame: [], roomSetup: newRoomSetup(),
   };
   addLogEntry(state.run, `${crew.name} leaves Dock Zero.`);
+}
+
+// A removed crew member must not stay named in the room's turn tracker or tunings: a save that still does is refused as damaged.
+function forgetMembers(run, removedIds) {
+  const { turns } = run.roomSetup;
+  turns.doneIds = turns.doneIds.filter((id) => !removedIds.has(id));
+  turns.outIds = turns.outIds.filter((id) => !removedIds.has(id));
+  run.roomSetup.tunings = run.roomSetup.tunings.filter((tuning) => !removedIds.has(tuning.tunerId) && !removedIds.has(tuning.carrierId));
+  run.roomSetup.stimmed = run.roomSetup.stimmed.filter((id) => !removedIds.has(id));
+  for (const id of removedIds) delete run.roomSetup.drones[id];
+}
+
+// A Stim-Shot is used up when it is used: the piece leaves the member's equipment and, for this room, their Life and Move are 2 higher
+// (js/gear.js effectiveStat). Taking it back (a tap too many) puts the piece back.
+export function useStimShot(run, memberId) {
+  const member = allMembers(run).find((candidate) => candidate.id === memberId);
+  if (!member || member.status !== 'active') throw new Error('Only a crew member taking part can use a Stim-Shot.');
+  if (run.roomSetup.stimmed.includes(memberId)) throw new Error(`${member.name} has already used a Stim-Shot in this room.`);
+  if (!gear.carries(member.equipment, 'Stim-Shot')) throw new Error(`${member.name} has no Stim-Shot.`);
+  member.equipment = gear.removeItemLine(member.equipment, 'Stim-Shot');
+  run.roomSetup.stimmed.push(memberId);
+}
+
+export function takeStimShotBack(run, memberId) {
+  const member = allMembers(run).find((candidate) => candidate.id === memberId);
+  if (!member || !run.roomSetup.stimmed.includes(memberId)) throw new Error('No Stim-Shot was used by that crew member.');
+  member.equipment = gear.addItemLine(member.equipment, 'Stim-Shot');
+  run.roomSetup.stimmed = run.roomSetup.stimmed.filter((id) => id !== memberId);
+  member.damage = Math.min(member.damage, member.stats.lf);   // the 2 extra Life are gone again
+}
+
+// An Emergency Med-Patch (once per challenge) gives a crew member back up to 3 Life: the carrier's chip is marked used.
+export function useMedPatch(run, carrierId, targetId) {
+  const entry = limitedUse.limitedUseEntries(run).find((candidate) => candidate.key === `${carrierId}:${MED_PATCH.item}`);
+  if (!entry) throw new Error('That crew member has no Emergency Med-Patch to use.');
+  if (limitedUse.isUsed(run, entry)) throw new Error('The Emergency Med-Patch has been used in this challenge already.');
+  const target = allMembers(run).find((candidate) => candidate.id === targetId && candidate.status === 'active');
+  if (!target) throw new Error('Pick a crew member taking part to heal.');
+  if (target.damage === 0) throw new Error(`${target.name} has no damage to heal: the Med-Patch is kept.`);
+  const healed = Math.min(MED_PATCH.heal, target.damage);
+  target.damage -= healed;
+  limitedUse.toggleUsed(run, entry.key);
+  return { target, healed };
+}
+
+export function removeMember(run, crewIndex, memberIndex) {
+  const [member] = run.crews[crewIndex].members.splice(memberIndex, 1);
+  forgetMembers(run, new Set([member.id]));
 }
 
 // a crew leaves the party (the last one cannot: retire the party instead); it is remembered like a retired crew
@@ -594,6 +726,7 @@ export function removeCrew(state, crewId) {
   if (run.crews.length === 1) throw new Error('This is the only crew: retire the party instead.');
   const crew = run.crews.find((candidate) => candidate.id === crewId);
   run.crews = run.crews.filter((candidate) => candidate !== crew);
+  forgetMembers(run, new Set(crew.members.map((member) => member.id)));
   state.station.pastCrews.push(pastCrewRecord(run, crew, 'left the party'));
   addLogEntry(run, `${crew.name} leaves the party.`);
 }

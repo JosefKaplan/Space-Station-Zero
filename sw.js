@@ -8,8 +8,8 @@ const NETWORK_TIMEOUT_MS = 4000;   // a weak signal at the table must not hold t
 const FILES_TO_KEEP_AT_INSTALL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'icons/apple-touch-icon.png', 'data/room-footprints.json',
-  'js/app.js', 'js/cloud-sync.js', 'js/config.js', 'js/crew-rules.js', 'js/data.js', 'js/map.js', 'js/qr.js', 'js/room-layouts.js',
-  'js/skirmish.js', 'js/state.js', 'js/terrain.js',
+  'js/app.js', 'js/cloud-sync.js', 'js/combat.js', 'js/config.js', 'js/crew-rules.js', 'js/data.js', 'js/enemies.js', 'js/gear.js', 'js/limited-use.js', 'js/map.js', 'js/preparation.js', 'js/qr.js', 'js/room-layouts.js',
+  'js/skirmish.js', 'js/state.js', 'js/terrain.js', 'js/turns.js',
 ];
 
 self.addEventListener('install', (event) => {

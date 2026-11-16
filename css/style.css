@@ -84,6 +84,13 @@ button {
 button:active { transform: translate(3px, 3px); box-shadow: none; }
 button.primary { background: var(--accent); color: var(--ink); font: 800 18px var(--display); letter-spacing: .06em; text-transform: uppercase; }
 button.danger { background: transparent; color: var(--danger); border-color: var(--danger); box-shadow: none; }
+button.next-step { background: transparent; color: var(--pink); border-color: var(--pink); box-shadow: none; }
+/* hover, for a mouse only (a tap on a phone must not leave a button lit): the outlined buttons fill with their own colour, the chips light up a little */
+@media (hover: hover) {
+  button.danger:hover:not(:disabled) { background: var(--danger); color: var(--ink); }
+  button.next-step:hover:not(:disabled) { background: var(--pink); color: var(--ink); }
+  .turn-chip button:hover:not(:disabled), .enemy-activate:hover:not(:disabled) { background: rgb(255 255 255 / 10%); }
+}
 button.exit { display: flex; flex-direction: column; align-items: flex-start; text-align: left; width: 100%; border-left: 6px solid var(--ok); }
 :focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
 
@@ -414,3 +421,87 @@ ol.seating { padding-left: 0; list-style: none; }
 /* no connection (sw.js keeps the app working) */
 .offline-chip { align-self: center; display: inline-block; margin: 0; padding: 2px 8px; border: 2px solid var(--ink); border-radius: 4px; background: var(--danger); color: var(--ink);
   font: 700 11px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+
+/* the turn tracker of a room being played */
+.turn-tracker { border: 2px solid var(--line); border-left-width: 8px; border-radius: 6px; padding: 10px 12px; margin: 12px 0; background: var(--field); }
+.turn-tracker.side-crew { border-left-color: var(--ok); }
+.turn-tracker.side-enemy { border-left-color: var(--pink); }
+.turn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.turn-head h3 { margin: 0; }
+.initiative { margin-left: auto; font: 700 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.side-crew .initiative { color: var(--ok); }
+.side-enemy .initiative { color: var(--pink); }
+.turn-crew-group { margin: 8px 0; }
+.turn-crew-group small { display: block; color: var(--muted); margin-bottom: 4px; }
+.turn-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.turn-chip { display: inline-flex; border: 2px solid var(--ink); border-radius: 6px; background: var(--panel-raised); box-shadow: 2px 2px 0 var(--ink); overflow: hidden; }
+.turn-chip button { min-height: 44px; border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0 12px; font-weight: 600; }
+.turn-chip .turn-chip-out { padding: 0 10px; color: var(--muted); border-left: 2px solid var(--ink); }
+.turn-chip.done { background: var(--panel); opacity: .6; }
+.turn-chip.done .turn-chip-main { text-decoration: line-through; text-decoration-thickness: 2px; }
+.turn-chip.out { background: var(--field); opacity: .5; }
+.turn-chip.out .turn-chip-out { color: var(--danger); }
+.turn-chip button:disabled { opacity: .45; }
+/* waiting for the roll, or the other side's go: the whole chip steps back, not only its text */
+.turn-chip.locked { background: var(--panel); box-shadow: none; }
+.turn-enemy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.turn-enemy span { margin-right: auto; }
+.turn-roll { border: 2px dashed var(--accent); border-radius: 6px; padding: 8px 10px; margin: 10px 0; }
+.turn-roll p { margin: 0 0 8px; }
+.turn-last { margin: 8px 0; font-family: var(--mono); font-size: 14px; }
+.turn-last.kept { color: var(--ok); }
+.turn-last.lost { color: var(--pink); }
+.enemy-roster { margin: 10px 0; }
+.enemy-roster h4 { margin: 4px 0 8px; color: var(--pink); }
+.enemy-rows { display: grid; gap: 8px; }
+.enemy-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 4px 8px; border: 2px solid var(--ink); border-radius: 6px; background: var(--panel-raised); box-shadow: 2px 2px 0 var(--ink); padding: 4px 6px; }
+.enemy-row button { min-height: 44px; box-shadow: none; }
+.enemy-activate { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; text-align: left; border: 0; background: transparent; padding: 0 6px; font-weight: 600; }
+.enemy-activate small { font-weight: 400; color: var(--muted); }
+.enemy-life { font: 700 20px var(--mono); white-space: nowrap; }
+.enemy-life b { color: var(--pink); }
+.life-steps { display: inline-flex; gap: 4px; }
+.life-step { min-width: 44px; padding: 0 8px; }
+.life-pips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.enemy-row .pip { min-height: 0; width: 30px; height: 30px; padding: 0; border: 2px solid var(--ink); border-radius: 50%; background: var(--field); }
+.enemy-row .pip.full { background: var(--pink); }
+.enemy-row.done { opacity: .6; }
+.enemy-row.done .enemy-activate span { text-decoration: line-through; text-decoration-thickness: 2px; }
+.enemy-row.out { background: var(--field); opacity: .5; }
+.enemy-row.out .enemy-activate span { text-decoration: line-through; }
+.enemy-row.out .life-pips, .enemy-row.out .life-step:not([data-change="1"]) { display: none; }
+.enemy-row button:disabled { opacity: .45; }
+.enemy-tools { margin: 8px 0; }
+.enemy-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.enemy-add input[type="text"] { flex: 1 1 140px; min-width: 0; }
+.combat-card { border: 2px solid var(--line); border-left: 8px solid var(--accent); border-radius: 6px; padding: 10px 12px; margin: 12px 0; background: var(--field); }
+.combat-card h3 { margin: 0; }
+.combat-card .stat { display: block; margin: 8px 0; }
+.combat-card select { width: 100%; }
+.reach-buttons button[aria-pressed="true"] { background: var(--accent); color: var(--ink); }
+.reach-buttons button:disabled { opacity: .45; }
+.combat-pools { font-size: 14px; margin: 8px 0; }
+.combat-result { border-top: 2px solid var(--line); margin-top: 10px; padding-top: 8px; }
+.combat-result p { margin: 6px 0; }
+.dice.small { gap: 6px; margin: 6px 0 10px; }
+.dice.small .die { width: 34px; height: 34px; font-size: 17px; box-shadow: 2px 2px 0 var(--ink); }
+.prep-card { border: 2px solid var(--line); border-left: 8px solid var(--ok); border-radius: 6px; padding: 10px 12px; margin: 12px 0; background: var(--field); }
+.prep-card h3 { margin: 0 0 6px; }
+.prep-card .stat { display: block; margin: 8px 0; }
+.prep-card select { width: 100%; }
+.prepared { margin: 8px 0; }
+.limited-use { margin: 10px 0; }
+.limited-use h4 { margin: 4px 0 6px; }
+.limited-chip { min-height: 44px; padding: 0 12px; font-weight: 600; text-align: left; }
+.limited-chip small { display: block; font-weight: 400; color: var(--muted); }
+.limited-chip.used { opacity: .55; text-decoration: line-through; text-decoration-thickness: 2px; }
+.limited-chip.used small { text-decoration: none; }
+.die.discarded { opacity: .4; text-decoration: line-through; text-decoration-thickness: 3px; }
+.stat-boosts { margin: 4px 0; }
+.stat-boosts small { font-weight: 400; }
+.med-patch { margin: 8px 0; }
+.med-patch select { flex: 1 1 160px; min-width: 0; }
+.enemy-ai { border-top: 2px solid var(--line); margin-top: 10px; padding-top: 6px; font-size: 14px; }
+.enemy-ai h4 { margin: 4px 0; color: var(--pink); }
+.enemy-ai ol { padding-left: 20px; margin: 4px 0; }
+.chip.danger { color: var(--danger); border-color: var(--danger); }

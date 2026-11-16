@@ -3,13 +3,19 @@
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
   COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, challengeName, CREW_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_COMMANDER_XP_TOLERANCE, SKIRMISH_REMINDERS, SKIRMISH_TURNS, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
-  LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS, startingGearRules,
+  ARMOR_ITEMS, DRONES, EDGE_ARMOR, LEGACY_PAGE_REFERENCE, LIMITED_USE_LABELS, MED_PATCH, STIM_SHOT, TEST_KINDS, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, TUNINGS, WEAPONS, WEAPON_PROFILES, startingGearRules,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
 import { fallenByChallenge, knownChallenges, renderStationMapSvg } from './map.js';
 import * as cloud from './cloud-sync.js';
 import { checkedCrewRules, fetchLocalCrewRules, forgetCrewRules, loadCrewRules, ruleNotesMentionedIn, saveCrewRules } from './crew-rules.js';
+import * as combat from './combat.js';
+import * as enemyLogic from './enemies.js';
+import * as gear from './gear.js';
+import * as limitedUse from './limited-use.js';
+import * as preparation from './preparation.js';
 import * as skirmish from './skirmish.js';
+import * as turnLogic from './turns.js';
 import * as store from './state.js';
 import {
   checkedPrivateRoomLayouts, fetchPrivateRoomLayouts, fetchPublicFootprints, loadRoomLayouts, mergeRoomLayouts, obstaclesForRandomTerrain,
@@ -63,11 +69,26 @@ const ui = {
   // Settings → Starting crews: the section shown, and the saved starting crew being edited ('new' for a new one) with its form
   // the versus start form: which skirmish challenge, how many players, their names (never saved)
   versusDraft: blankVersusDraft(),
+  // the room's enemy list: the form for adding one by hand (never saved)
+  isAddingEnemy: false,
+  enemyDraft: { name: '', life: '', combat: '' },
+  // the combat calculator in the room card (never saved)
+  combat: blankCombat(),
+  // the Dice tab's test for a crew member, and the Emergency Med-Patch's chosen target per carrier (never saved)
+  testRoll: { member: '', test: 'reaction', extra: 0, needed: '', target: '', rolled: null },
+  medPatchTarget: {},
   settingsSection: 'general',
   editingTemplateId: null,
   templateDraft: null,
   newCrew: { size: 6, shipType: 'Exploration', edge: EDGES[0], memberTypes: Array(8).fill('Soldier'), ...blankCrewFormFields() },
 };
+
+function blankCombat() {
+  return {
+    isOpen: false, attacker: '', defender: '', weapon: '', reach: 'close', hasCover: false, extraAttackDice: 0, extraDefenseDice: 0,
+    armor: '', armorFor: '', isKinetic: false, isFar: false, isOwnDice: false, ownAttackDice: '', ownDefenseDice: '', result: null,
+  };
+}
 
 function blankVersusDraft() {
   return { challengeKey: '', playerCount: 2, names: ['', '', '', ''] };
@@ -95,6 +116,11 @@ function rollD12() {
   return (buffer[0] % 12) + 1;
 }
 
+const rollTwoD12 = () => rollD12() + rollD12();
+
+// `count` d12 results (at most 40, the largest pool the app deals with)
+const rollDice = (count) => Array.from({ length: Math.min(count, combat.MAX_DICE_IN_A_POOL) }, rollD12);
+
 function getAtPath(root, path) {
   return path.split('.').reduce((object, key) => object[key], root);
 }
@@ -112,9 +138,10 @@ function options(values, selected) {
   )).join('');
 }
 
-function confirmButton(action, label, extraAttributes = '') {
+// `styleClass`: red ("danger") for things that delete; a step that only moves on, like the next turn, is pink
+function confirmButton(action, label, extraAttributes = '', styleClass = 'danger') {
   const isArmed = ui.confirmKey === action + extraAttributes;
-  return `<button class="danger" data-action="${action}" data-confirm="${escapeHtml(action + extraAttributes)}" ${extraAttributes}>`
+  return `<button class="${styleClass}" data-action="${action}" data-confirm="${escapeHtml(action + extraAttributes)}" ${extraAttributes}>`
     + `${isArmed ? 'Tap again to confirm' : label}</button>`;
 }
 
@@ -176,6 +203,9 @@ function renderJourney() {
       <p class="eyebrow">Challenge ${number} <span class="chip ${isCleared ? 'ok' : 'warn'}">${isCleared ? 'cleared' : 'in progress'}</span></p>
       <h2>${escapeHtml(challengeName(number))}</h2>
       <p class="page-ref">Rulebook p. ${challenge.page}</p>
+      ${isCleared ? '' : renderPreparedLine()}
+      ${isCleared ? '' : renderTurnTracker(number)}
+      ${isCleared ? '' : renderCombat()}
       ${isCleared ? '' : renderRoomTable(number, { isSettingUp: false })}
       ${renderReminders(reminders)}
       ${isCleared ? renderExits(challenge) : (ui.postGame ? '' : `<div class="action-bar"><button class="primary" data-action="openPostGame">Challenge over →</button>
@@ -185,11 +215,25 @@ function renderJourney() {
     ${renderStationMap()}`;
 }
 
+// a member's stat with what changes it in this room: Jump Boots, and a Stim-Shot used here (js/gear.js)
+const isStimmed = (member) => state.run?.roomSetup.stimmed.includes(member.id) ?? false;
+const effectiveStatOf = (member, stat) => gear.effectiveStat(member, stat, { isStimmed: isStimmed(member) });
+const crewOfMember = (memberId) => state.run.crews.find((crew) => crew.members.some((member) => member.id === memberId));
+const crewMembersInRoom = () => store.allMembers(state.run).filter((member) => member.status === 'active');
+
+// "Move 6 (Jump Boots +2)": shown only for the stats something changes
+function renderStatBoosts(member) {
+  return ['lf', 'mv'].map((stat) => {
+    const parts = gear.statBonusParts(member, stat, { isStimmed: isStimmed(member) });
+    return parts.length ? `<span class="chip ok">${STAT_LABELS[stat]} ${effectiveStatOf(member, stat)} <small>(${parts.map((part) => `${escapeHtml(part.source)} +${part.amount}`).join(', ')})</small></span>` : '';
+  }).filter(Boolean).join(' ');
+}
+
 // "Crew A & Crew B": what the party is called
 const partyName = (run) => run.crews.map((crew) => crew.name).join(' & ');
 
 function activeCrewModelCount() {
-  return store.allMembers(state.run).filter((member) => member.status === 'active').length;
+  return crewMembersInRoom().length;
 }
 
 // the book's "per crew" counts crews that take part: those with someone able to play this room
@@ -258,10 +302,7 @@ function renderBookText(text) {
 
 // one enemy stat bar per row, as printed (Lf Mv Co Re In, and armor when the room gives it)
 // some enemies have a solo and a co-op stat bar: with two or more crews taking part the co-op one is yours
-function isStatBarForOtherPartySize(name) {
-  const isCoop = participatingCrewCount() >= 2;
-  return (name.includes('(solo play)') && isCoop) || (name.includes('(co-op play)') && !isCoop);
-}
+const isStatBarForOtherPartySize = (name) => enemyLogic.isStatBarForOtherPartySize(name, participatingCrewCount());
 
 function renderEnemyStats(stats) {
   if (!stats?.length) return '';
@@ -362,6 +403,7 @@ function renderRoomSetup(number, challenge, reminders) {
       ${renderRoomTable(number, { isSettingUp: true })}
       ${renderReminders(reminders)}
       ${renderPartyLine()}
+      ${renderPreparation()}
       <div class="action-bar"><button class="primary" data-action="beginChallenge">Begin challenge →</button></div>
     </section>`;
 }
@@ -433,6 +475,8 @@ function renderPostGame(challenge) {
   const draft = ui.postGame;
   const run = state.run;
   const oneStatUpRange = injuryRollRangeLabel('oneStatUp');
+  // each Stabilization Module carried by someone taking part lets the player reroll one injury roll after the challenge (p. 36–37)
+  const rerollsLeft = crewMembersInRoom().filter((member) => gear.carries(member.equipment, 'Stabilization Module')).length - draft.rerollsUsed;
   const memberRow = (member) => {
     const downed = draft.downed[member.id];
     const memberId = escapeHtml(member.id);
@@ -443,16 +487,18 @@ function renderPostGame(challenge) {
         <label class="inline">bonus XP <input type="number" min="0" inputmode="numeric" data-bind-ui="postGame.bonusXp.${memberId}" value="${escapeHtml(draft.bonusXp[member.id] ?? '')}"></label>
       </div>
       ${downed ? `<div class="row injury">
-        <button data-action="rollInjury" data-id="${memberId}">Roll 2d12</button>
+        ${downed.roll === '' ? `<button data-action="rollInjury" data-id="${memberId}">Roll 2d12</button>` : ''}
+        ${downed.roll !== '' && !downed.isRerolled && rerollsLeft > 0 ? `<button data-action="rerollInjury" data-id="${memberId}">Reroll (Stabilization Module)</button>` : ''}
         <input type="number" min="${INJURY_ROLL_MIN}" max="${INJURY_ROLL_MAX}" inputmode="numeric" placeholder="${INJURY_ROLL_MIN}–${INJURY_ROLL_MAX}" data-bind-ui="postGame.downed.${memberId}.roll" data-outcome-element="outcome-${memberId}" data-dead-question-element="dead-question-${memberId}" value="${escapeHtml(downed.roll)}">
         <select data-bind-ui="postGame.downed.${memberId}.stat" title="Stat to raise on a roll of ${oneStatUpRange}">${options(STAT_KEYS.map((stat) => [stat, `+${STAT_LABELS[stat]} on ${oneStatUpRange}`]), downed.stat)}</select>
-      </div><p class="outcome" id="outcome-${memberId}">${escapeHtml(outcome?.label ?? '')}</p>
+      </div><p class="outcome" id="outcome-${memberId}">${escapeHtml(outcome?.label ?? '')}${downed.isRerolled ? ' (rerolled with a Stabilization Module)' : ''}</p>
       <div class="dead-question" id="dead-question-${memberId}"${outcome?.key === 'hidden' ? '' : ' hidden'}>
         <p class="hint">A roll of 2 is "Dead?": read p. 114, #1 now, then say what it decided.</p>
         <select aria-label="What p. 114, #1 decided" data-bind-ui="postGame.downed.${memberId}.deadQuestion">${options([['', '— what did the page decide? —'], ['dead', 'They died'], ['survived', 'They survived (apply any penalty on the Crew tab)']], downed.deadQuestion)}</select>
       </div>` : ''}
     </div>`;
   };
+  const waitingForRoll = Object.values(draft.downed).filter((entry) => entry.roll === '').length;
   const crewsHtml = run.crews.map((crew) => {
     const participants = crew.members.filter((member) => member.status === 'active');
     return `${run.crews.length > 1 ? `<h4 class="plain-heading">${escapeHtml(crew.name)}</h4>` : ''}${participants.map(memberRow).join('') || '<p class="hint">Nobody from this crew took part.</p>'}`;
@@ -470,7 +516,8 @@ function renderPostGame(challenge) {
   return `<section class="card">
     <h2>After the challenge</h2>
     <h3>1 · Injuries &amp; death (p. 40)</h3>
-    <p class="hint">Tick everyone who was put Out of Action and needs a roll. Survivors get +${XP_PER_SURVIVED_CHALLENGE} XP (commander +${XP_PER_SURVIVED_CHALLENGE + COMMANDER_BONUS_XP_PER_CHALLENGE}) automatically.</p>
+    <p class="hint">Everyone marked out of action in the turn tracker, or at 0 Life, is ticked already: tick or untick to fix it. Each ticked crew member needs a roll. Survivors get +${XP_PER_SURVIVED_CHALLENGE} XP (commander +${XP_PER_SURVIVED_CHALLENGE + COMMANDER_BONUS_XP_PER_CHALLENGE}) automatically.</p>
+    ${waitingForRoll ? `<button class="primary" data-action="rollAllInjuries">Roll 2d12 for ${waitingForRoll === 1 ? 'the one who needs it' : `all ${waitingForRoll} who need it`}</button>` : ''}
     ${crewsHtml}
     ${agendaHtml}
     ${challenge.canEarnLegacy ? `<h3>Rewards</h3>
@@ -607,10 +654,11 @@ function renderMember(member, index, crewIndex, crew) {
     </div>
     <div class="row">
       <input class="grow" data-bind="${path}.type" value="${escapeHtml(member.type)}" aria-label="Type">
-      <span class="chip ${member.stats.lf - member.damage <= 0 ? 'warn' : 'ok'}">Life ${member.stats.lf - member.damage}/${member.stats.lf}</span>
+      <span class="chip ${effectiveStatOf(member, 'lf') - member.damage <= 0 ? 'warn' : 'ok'}">Life ${effectiveStatOf(member, 'lf') - member.damage}/${effectiveStatOf(member, 'lf')}</span>
     </div>
     ${advancementHtml}
     <div class="stats">${STAT_KEYS.map((stat) => stepper(STAT_LABELS[stat], `${path}.stats.${stat}`, member.stats[stat])).join('')}</div>
+    ${renderStatBoosts(member) ? `<p class="stat-boosts">${renderStatBoosts(member)}</p>` : ''}
     <div class="stats two">${stepper('Damage', `${path}.damage`, member.damage)}${stepper('XP', `${path}.xp`, member.xp)}</div>
     <textarea rows="2" placeholder="Special abilities" data-bind="${path}.abilities">${escapeHtml(member.abilities)}</textarea>
     ${appendPicker(`${path}.abilities`, '+ Add ability…', abilityPickerOptions())}
@@ -732,17 +780,40 @@ function renderLog() {
 // ---------- dice ----------
 
 function diceResultText(rolled) {
-  const targetNumber = Number(rolled.target) || 0;
   const successesNeeded = Number(rolled.needed) || 0;
-  const evenSuccesses = rolled.faces.filter((face) => face % 2 === 0 && face >= targetNumber).length;
-  const isCriticalSuccess = rolled.faces.filter((face) => face === 12).length >= 2;
-  const isCriticalFailure = !isCriticalSuccess && rolled.faces.filter((face) => face === 1).length >= 2;
+  const { successes, isCriticalSuccess, isCriticalFailure } = combat.scorePool(rolled.faces, Number(rolled.target) || 0);
   if (isCriticalFailure) return 'Critical failure';
-  const successes = isCriticalSuccess ? evenSuccesses * 2 : evenSuccesses;
   const count = `${successes} success${successes === 1 ? '' : 'es'}`;
   if (isCriticalSuccess) return `Critical success — ${count}`;
   if (!successesNeeded) return count;
   return successes >= successesNeeded ? `${count} — passed` : `${count} — ${successesNeeded - successes} short`;
+}
+
+// A test for a crew member with what their gear adds (js/gear.js): the stat, then each piece of equipment that helps this kind of test
+function renderTestRoller() {
+  if (!state.run) return '';
+  const candidates = state.run.crews.flatMap((crew) => crew.members.filter((member) => member.status === 'active').map((member) => ({ member, label: state.run.crews.length > 1 ? `${member.name} (${crew.name})` : member.name })));
+  if (candidates.length === 0) return '';
+  const draft = ui.testRoll;
+  const chosen = candidates.find((candidate) => candidate.member.id === draft.member) ?? candidates[0];
+  const pool = gear.testPool(chosen.member, draft.test, { isStimmed: isStimmed(chosen.member) });
+  const breakdown = [...pool.parts, { source: 'extra', dice: draft.extra }].filter((part) => part.dice > 0).map((part) => `${part.source} ${part.dice}`).join(' + ');
+  const rolled = draft.rolled;
+  const isSuccess = (face) => face % 2 === 0 && face >= (rolled?.target ?? 0);
+  const resultHtml = rolled ? `<p class="hint">${escapeHtml(rolled.name)} · ${escapeHtml(rolled.testLabel)}</p>
+    <div class="dice">${rolled.faces.map((face, index) => `<span class="die ${index === rolled.discarded ? 'discarded' : (isSuccess(face) ? 'hit' : '')}">${face}</span>`).join('')}</div>
+    <p class="result">${escapeHtml(diceResultText({ faces: rolled.kept, target: rolled.target, needed: rolled.needed }))}</p>
+    ${rolled.discarded !== null ? '<p class="hint">The struck-out die is the one discarded (the Heads-Up Display): the worst die goes.</p>' : ''}` : '';
+  return `<section class="card form"><h2>Test for a crew member</h2>
+    <p class="hint">Rolls the stat plus what the equipment adds to this kind of test. Abilities and edges are not counted: add their dice under Extra.</p>
+    <label class="stat"><span class="stat-label">Who</span><select data-bind-ui="testRoll.member" data-rerender aria-label="Crew member">${options(candidates.map((candidate) => [candidate.member.id, candidate.label]), chosen.member.id)}</select></label>
+    <label class="stat"><span class="stat-label">Test</span><select data-bind-ui="testRoll.test" data-rerender aria-label="Kind of test">${options(Object.entries(TEST_KINDS).map(([key, kind]) => [key, kind.label]), draft.test)}</select></label>
+    <div class="stats three">${stepper('Extra dice', 'extra', draft.extra, 'stepTest')}
+      <label class="stat"><span class="stat-label">Needed</span><input type="number" min="0" max="99" inputmode="numeric" placeholder="any" data-bind-ui="testRoll.needed" value="${escapeHtml(draft.needed)}"></label>
+      <label class="stat"><span class="stat-label">Target</span><input type="number" min="0" max="12" inputmode="numeric" placeholder="${pool.kind.defaultTarget ? `${pool.kind.defaultTarget}+` : 'n+'}" data-bind-ui="testRoll.target" value="${escapeHtml(draft.target)}"></label></div>
+    <p class="combat-pools"><b>${pool.total + draft.extra} dice</b> <small>(${escapeHtml(breakdown)})</small></p>
+    ${pool.notes.map((note) => `<p class="hint">${escapeHtml(note)}</p>`).join('')}
+    <button class="primary" data-action="rollTest">Roll</button>${resultHtml}</section>`;
 }
 
 function renderDice() {
@@ -756,7 +827,7 @@ function renderDice() {
   }
   const numberField = (label, key, value, max, placeholder) => `<label class="stat"><span class="stat-label">${label}</span>
     <input type="number" min="0" max="${max}" inputmode="numeric" placeholder="${placeholder}" data-bind-ui="dice.${key}" value="${escapeHtml(value)}"></label>`;
-  return `<section class="card form"><h2>Dice</h2>
+  return `${renderTestRoller()}<section class="card form"><h2>Dice</h2>
     <p class="hint">A test reads like <b>Reaction 2 (6+)</b>: roll your Reaction in d12s, you need 2 successes, evens of 6 or more count.</p>
     <div class="stats three">${stepper('Dice', 'dice.pool', pool, 'stepUi')}
       ${numberField('Needed', 'needed', needed, 99, 'any')}${numberField('Target', 'target', target, 12, 'n+')}</div>
@@ -986,13 +1057,500 @@ function renderVersus() {
   return state.versus.match ? renderVersusMatch(state.versus.match) : renderVersusStart();
 }
 
+// ---------- turn tracker ----------
+// Who has the initiative, who has gone, what the next roll to keep it needs (p. 13–15): see js/turns.js.
+
+function renderTurnChip(member, turns) {
+  const isDone = turns.doneIds.includes(member.id);
+  const isOut = turns.outIds.includes(member.id);
+  const isLocked = !isDone && !isOut && (turns.side !== 'crew' || turns.awaitingRoll);
+  const id = escapeHtml(member.id);
+  return `<span class="turn-chip${isDone ? ' done' : ''}${isOut ? ' out' : ''}${isLocked ? ' locked' : ''}">
+    <button class="turn-chip-main" data-action="turnToggleDone" data-id="${id}"${isOut || isLocked ? ' disabled' : ''} aria-pressed="${isDone}">${isDone ? '✓ ' : ''}${escapeHtml(member.name)}</button>
+    <button class="turn-chip-out" data-action="turnToggleOut" data-id="${id}" aria-pressed="${isOut}" aria-label="${escapeHtml(member.name)}: out of action" title="Out of action">✕</button></span>`;
+}
+
+function renderRollLine(turns) {
+  const needed = turnLogic.rollNeeded(turns);
+  const sideName = turns.side === 'crew' ? 'your crew' : 'the enemies';
+  if (needed !== null) {
+    return `<div class="turn-roll"><p><b>Keep the initiative for ${sideName}?</b> Roll a d12: <b>${needed}+</b> keeps it.</p>
+      <p class="hint">That was activation ${turns.run} in a row since the initiative came to this side. The count starts again each time it comes back.</p>
+      <div class="row wrap"><button class="primary" data-action="turnRoll">Roll d12</button>
+        <button data-action="turnKept">Rolled it: kept</button><button data-action="turnLost">Rolled it: lost</button></div></div>`;
+  }
+  const last = turns.lastRoll;
+  if (!last) return '';
+  const who = last.side === 'crew' ? 'Your crew' : 'The enemies';
+  const result = last.kept ? `kept the initiative` : `lost the initiative`;
+  return `<p class="turn-last ${last.kept ? 'kept' : 'lost'}">${who} ${last.roll === null ? `${result} (marked by hand)` : `rolled ${last.roll} (needed ${last.needed}+): ${result}`}.</p>`;
+}
+
+// who is able to act, for the turn logic: crew members still in the room, and the enemies still standing (null: no enemy list)
+function turnSides() {
+  const enemies = state.run.roomSetup.enemies;
+  return { crewIds: crewMembersInRoom().map((member) => member.id), enemyIds: enemies.length ? enemyLogic.standingIds(enemies) : null };
+}
+
+// Any change can alter who is left to act in the room (a crew member's status, a member or crew added or removed, an enemy put down
+// or back up): a side with nobody left hands the initiative on, and nobody rolls for a side that cannot take it. So this runs
+// before every save, not at the few call sites that happen to know.
+function settleTurnTracker() {
+  if (state.run) turnLogic.settleInitiative(state.run.roomSetup.turns, turnSides());
+}
+
+function settleAndSave() {
+  settleTurnTracker();
+  store.saveState();
+}
+
+// a whole new list: nothing "done" from the old one counts any more
+function replaceEnemies(enemies) {
+  state.run.roomSetup.enemies = enemies;
+  state.run.roomSetup.turns.enemyDoneIds = [];
+}
+
+// ---------- the room's enemies ----------
+// The enemies of the room being played, each with its Life (p. 21): see js/enemies.js. Built from the room's briefing when the
+// crew begins the challenge (the private room text), or by hand. Their rows are also their chips in the turn tracker.
+
+function renderLifePips(enemy) {
+  if (enemy.life > enemyLogic.MAX_LIFE_WITH_PIPS) return '';
+  const left = enemyLogic.lifeLeft(enemy);
+  const id = escapeHtml(enemy.id);
+  const pips = Array.from({ length: enemy.life }, (_, index) => (
+    `<button class="pip${index < left ? ' full' : ''}" data-action="enemyPip" data-id="${id}" data-pip="${index + 1}" aria-label="Life ${index + 1}" aria-pressed="${index < left}"></button>`)).join('');
+  return `<span class="life-pips" role="group" aria-label="Life left: tap a pip to set it">${pips}</span>`;
+}
+
+function renderEnemyRow(enemy, turns) {
+  const enemies = state.run.roomSetup.enemies;
+  const isOut = enemyLogic.isOutOfAction(enemy);
+  const isDone = turns.enemyDoneIds.includes(enemy.id);
+  const isLocked = !isDone && !isOut && (turns.side !== 'enemy' || turns.awaitingRoll);
+  const id = escapeHtml(enemy.id);
+  const lifeButton = (change, label) => `<button class="life-step" data-action="enemyLife" data-id="${id}" data-change="${change}"
+    aria-label="${label} Life: ${escapeHtml(enemyLogic.displayName(enemies, enemy))}">${change > 0 ? '+' : '−'}${Math.abs(change)}</button>`;
+  return `<div class="enemy-row${isDone ? ' done' : ''}${isOut ? ' out' : ''}">
+    <button class="enemy-activate" data-action="turnEnemyDone" data-id="${id}"${isOut || isLocked ? ' disabled' : ''} aria-pressed="${isDone}">
+      <span>${isDone ? '✓ ' : ''}${escapeHtml(enemyLogic.displayName(enemies, enemy))}</span>
+      <small>${isOut ? 'out of action' : `${enemy.armor ? `armor ${escapeHtml(enemy.armor)}` : 'no armor'}${enemy.isHidden ? ' · hidden: activates last' : ''}`}</small></button>
+    <span class="enemy-life" aria-label="Life left"><b>${enemyLogic.lifeLeft(enemy)}</b>/${enemy.life}</span>
+    <span class="life-steps">${enemy.life > enemyLogic.MAX_LIFE_WITH_PIPS ? lifeButton(-5, 'Take 5 from') : ''}${lifeButton(-1, 'Take 1 from')}${lifeButton(1, 'Give 1 to')}</span>
+    ${renderLifePips(enemy)}
+  </div>`;
+}
+
+// what is left to do about the list: fill it from the briefing, add the groups that come later, add one by hand
+function renderEnemyListTools(number) {
+  const enemies = state.run.roomSetup.enemies;
+  const roomLayout = roomLayoutFor(roomLayouts, number);
+  const { enemies: fromBriefing, later, notListed } = enemyLogic.startingEnemies(roomLayout, participatingCrewCount());
+  const parts = [];
+  if (enemies.length === 0 && fromBriefing.length > 0) {
+    parts.push(`<button class="primary" data-action="fillEnemies">List this room's enemies (${fromBriefing.length})</button>`);
+  }
+  for (const group of later) {
+    parts.push(`<button data-action="addEnemyGroup" data-index="${group.index}">Add ${group.size}× ${escapeHtml(group.stat.name)} <small>(${escapeHtml(group.when)})</small></button>`);
+  }
+  parts.push(ui.isAddingEnemy
+    ? `<div class="enemy-add"><input type="text" placeholder="Enemy name" aria-label="Enemy name" maxlength="40" data-bind-ui="enemyDraft.name" value="${escapeHtml(ui.enemyDraft.name)}">
+        <input type="number" inputmode="numeric" placeholder="Life" aria-label="Life" min="1" max="${enemyLogic.MAX_ENEMY_LIFE}" data-bind-ui="enemyDraft.life" value="${escapeHtml(ui.enemyDraft.life)}">
+        <input type="number" inputmode="numeric" placeholder="Combat" aria-label="Combat, optional" min="0" max="${enemyLogic.MAX_ENEMY_LIFE}" data-bind-ui="enemyDraft.combat" value="${escapeHtml(ui.enemyDraft.combat)}">
+        <button class="primary" data-action="addEnemyByHand">Add</button><button data-action="cancelAddEnemy">Cancel</button></div>`
+    : '<button data-action="startAddEnemy">+ Add an enemy by hand</button>');
+  if (enemies.length > 0) parts.push(confirmButton('clearEnemies', 'Clear the list'));
+  const missing = notListed.length
+    ? `<p class="hint">Not on the list for lack of a number or a Life stat in the briefing: ${notListed.map((group) => escapeHtml(group.name)).join(', ')}. Add them by hand.</p>` : '';
+  return `<div class="row wrap enemy-tools">${parts.join('')}</div>${missing}`;
+}
+
+function renderEnemySide(number, turns, isEnemySide) {
+  const enemies = state.run.roomSetup.enemies;
+  const doneButton = `<button data-action="turnEnemiesDone" aria-pressed="${turns.enemiesDone}">${turns.enemiesDone ? 'Enemies are done ✓ (tap to undo)' : 'Enemies are done'}</button>`;
+  if (enemies.length === 0) {
+    return `<div class="turn-enemy">
+      <span>Enemy activations: <b>${turns.enemyActivations}</b></span>
+      <button data-action="turnEnemyPlus"${isEnemySide && !turns.awaitingRoll ? '' : ' disabled'}>+ An enemy activated</button>
+      <button data-action="turnEnemyMinus" aria-label="One fewer enemy activation"${turns.enemyActivations ? '' : ' disabled'}>−</button>
+      ${doneButton}
+    </div>${renderEnemyListTools(number)}`;
+  }
+  const standing = enemyLogic.standingIds(enemies).length;
+  return `<div class="enemy-roster">
+    <h4>Enemies <span class="chip ${standing ? 'warn' : 'ok'}">${standing ? `${standing} of ${enemies.length} standing` : 'all out of action'}</span></h4>
+    <div class="enemy-rows">${enemies.map((enemy) => renderEnemyRow(enemy, turns)).join('')}</div>
+    <p class="hint">Tap an enemy when it activates. Take Life off with the − buttons, or tap a pip to set it. At 0 Life it is out of action and removed from play (p. 21); + gives a point back.</p>
+    <div class="row wrap">${doneButton}</div>
+    ${renderEnemyListTools(number)}
+  </div>`;
+}
+
+function renderTurnTracker(number) {
+  const run = state.run;
+  const turns = run.roomSetup.turns;
+  const sides = turnSides();
+  const limit = CHALLENGES[number].turnLimit;
+  const isComplete = turnLogic.isTurnComplete(turns, sides);
+  const limitChip = !limit ? ''
+    : turns.turn > limit ? `<span class="chip danger">past the limit (end of turn ${limit})</span>`
+      : turns.turn === limit ? `<span class="chip warn">last turn: the limit is its end</span>`
+        : `<span class="chip">limit: end of turn ${limit}</span>`;
+  const crewGroups = run.crews.map((crew) => {
+    const chips = crew.members.filter((member) => member.status === 'active').map((member) => renderTurnChip(member, turns)).join('');
+    return chips ? `<div class="turn-crew-group">${run.crews.length > 1 ? `<small>${escapeHtml(crew.name)}</small>` : ''}<div class="turn-chips">${chips}</div></div>` : '';
+  }).join('');
+  const isEnemySide = turns.side === 'enemy';
+  const nextTurnButton = isComplete
+    ? `<button class="primary" data-action="turnNext">Turn ${turns.turn} is complete: start turn ${turns.turn + 1} →</button>`
+    : confirmButton('turnNext', `Start turn ${turns.turn + 1} now`, '', 'next-step');
+  return `<section class="turn-tracker side-${turns.side}">
+    <div class="turn-head"><h3>Turn ${turns.turn}</h3>${limitChip}
+      <span class="initiative">${isEnemySide ? 'Initiative: the enemies' : 'Initiative: your crew'}</span></div>
+    ${renderRollLine(turns)}
+    <div class="turn-crew">${crewGroups || '<p class="hint">Nobody from the crew is able to play this room.</p>'}</div>
+    <p class="hint">Tap a crew member when they activate. ✕ marks someone put out of action.</p>
+    ${renderLimitedUse()}
+    ${renderEnemySide(number, turns, isEnemySide)}
+    ${isEnemySide && !isComplete ? renderEnemyAi() : ''}
+    <div class="row wrap">${nextTurnButton}</div>
+  </section>`;
+}
+
+// the book's enemy action list: its own wording, so only from the private rules file; without it a pointer to the page
+function renderEnemyAi() {
+  const enemyAi = crewRules?.enemyAi;
+  if (!enemyAi) return '<div class="enemy-ai"><p class="hint">When an enemy activates: the Enemy Action Priority list, p. 42 (hidden enemies go last, p. 22).</p></div>';
+  return `<div class="enemy-ai"><h4>When an enemy activates (p. 42)</h4>
+    <ol>${enemyAi.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>
+    <details class="rule-note"><summary>ⓘ Enemy AI, the book's introduction</summary><p>${escapeHtml(enemyAi.intro)}</p></details></div>`;
+}
+
+// ---------- preparation and once-per-X abilities ----------
+// What the crew does at the start of the challenge (js/preparation.js) and the abilities that can be used once per turn, challenge or
+// game (js/limited-use.js).
+
+
+// "Ann (Crew A): Sidearm": the crew is named only when there are several
+function carriedItemLabel(carrierId, carrierName, item) {
+  return `${carrierName}${state.run.crews.length > 1 ? ` (${crewOfMember(carrierId)?.name ?? ''})` : ''}: ${item}`;
+}
+
+function tuningEffectText(kind, item) {
+  if (kind === 'weapon') return `+${WEAPON_PROFILES[item].bonusDice} → +${combat.weaponDiceOf(item, [item])} dice`;
+  const value = combat.armorValueOf(item);
+  const only = ARMOR_ITEMS[item]?.onlyAgainst ? ' against Ranged Kinetic attacks' : '';
+  return value === null ? `+${TUNINGS.armor.bonus} armor, raise it by hand` : `armor ${value} → ${value + TUNINGS.armor.bonus}${only}`;
+}
+
+function renderTuningSelect(kind, tuner, members) {
+  const { tunings } = state.run.roomSetup;
+  const current = preparation.tuningOf(tunings, kind, tuner.id);
+  const isTakenByAnother = ({ carrierId, item }) => tunings.some((tuning) => tuning.kind === kind && tuning.carrierId === carrierId && tuning.item === item && tuning.tunerId !== tuner.id);
+  const choices = preparation.tuneableItems(members, kind).filter((choice) => !isTakenByAnother(choice));
+  const choiceOptions = choices.map((choice) => [`${choice.carrierId}|${choice.item}`, `${carriedItemLabel(choice.carrierId, choice.carrierName, choice.item)} (${tuningEffectText(kind, choice.item)})`]);
+  const currentValue = current ? `${current.carrierId}|${current.item}` : '';
+  // a tuning whose piece is no longer carried stays visible, so it can be taken back
+  if (current && !choiceOptions.some(([value]) => value === currentValue)) choiceOptions.push([currentValue, `${current.item} (no longer carried)`]);
+  return `<label class="stat"><span class="stat-label">${TUNINGS[kind].ability} · ${escapeHtml(tuner.name)}</span>
+    <select data-input-action="setTuning" data-kind="${kind}" data-tuner="${escapeHtml(tuner.id)}" aria-label="${TUNINGS[kind].ability}: ${escapeHtml(tuner.name)}">
+      ${options([['', '— nothing —'], ...choiceOptions], currentValue)}</select></label>`;
+}
+
+function renderPreparation() {
+  // each member with their crew's edge: it can give them Power Armor to tune
+  const members = state.run.crews.flatMap((crew) => crew.members.map((member) => ({ ...member, edge: crew.edge })));
+  const selects = ['weapon', 'armor'].flatMap((kind) => preparation.tunersOf(members, kind).map((tuner) => renderTuningSelect(kind, tuner, members)));
+  const stimShots = renderStimShots();
+  const drones = renderDroneSelects();
+  return `<section class="prep-card"><h3>Before you begin</h3>
+    <p class="hint">At the start of a challenge each Engineer taking part tunes one weapon (+${TUNINGS.weapon.bonus} die, p. ${TUNINGS.weapon.page}) and each Scientist one piece of armor (+${TUNINGS.armor.bonus} armor, p. ${TUNINGS.armor.page}), for this challenge only. No piece twice; any crew's will do.</p>
+    ${selects.join('') || '<p class="hint">Nobody taking part has Weapon Tuning or Armor Tuning: nothing to tune.</p>'}
+    ${drones}
+    ${stimShots ? `<h4>Stim-Shot (p. 37)</h4><p class="hint">Single use: +${STIM_SHOT.stat.lf} Life and +${STIM_SHOT.stat.mv} Move for one challenge. Using it takes it out of the equipment.</p>${stimShots}` : ''}</section>`;
+}
+
+// who has a Stim-Shot to use, and who has used one in this room (tap again to take it back)
+function renderStimShots() {
+  const { stimmed } = state.run.roomSetup;
+  const buttons = crewMembersInRoom().filter((member) => stimmed.includes(member.id) || gear.carries(member.equipment, STIM_SHOT.item)).map((member) => {
+    const isUsed = stimmed.includes(member.id);
+    return `<button class="limited-chip${isUsed ? ' used' : ''}" data-action="toggleStimShot" data-id="${escapeHtml(member.id)}" aria-pressed="${isUsed}">
+      ${isUsed ? '✓ ' : ''}${escapeHtml(member.name)} <small>${isUsed ? `used: Life ${effectiveStatOf(member, 'lf')}, Move ${effectiveStatOf(member, 'mv')} (tap to take it back)` : 'use a Stim-Shot'}</small></button>`;
+  });
+  return buttons.length ? `<div class="turn-chips">${buttons.join('')}</div>` : '';
+}
+
+// the Drone System is a Shielding or a Targeting Drone (p. 37–38); the book does not say when it is chosen, so it is set for each challenge
+function renderDroneSelects() {
+  const { drones } = state.run.roomSetup;
+  return crewMembersInRoom().filter((member) => gear.carries(member.equipment, 'Drone System')).map((member) => `
+    <label class="stat"><span class="stat-label">Drone System · ${escapeHtml(member.name)}</span>
+      <select data-input-action="setDrone" data-member="${escapeHtml(member.id)}" aria-label="Drone of ${escapeHtml(member.name)}">
+        ${options([['', '— not chosen —'], ...Object.entries(DRONES).map(([key, drone]) => [key, drone.name])], drones[member.id] ?? '')}</select></label>`).join('');
+}
+
+function renderPreparedLine() {
+  const { tunings, stimmed, drones } = state.run.roomSetup;
+  const members = store.allMembers(state.run);
+  const nameOf = (id) => members.find((member) => member.id === id)?.name ?? '?';
+  const chips = [
+    ...tunings.map((tuning) => {
+      const carrier = members.find((member) => member.id === tuning.carrierId);
+      return `<span class="chip ok">${escapeHtml(carriedItemLabel(tuning.carrierId, carrier?.name ?? '?', tuning.item))} · ${escapeHtml(tuningEffectText(tuning.kind, tuning.item))}</span>`;
+    }),
+    ...stimmed.map((id) => `<span class="chip ok">${escapeHtml(nameOf(id))} · Stim-Shot: Life +${STIM_SHOT.stat.lf}, Move +${STIM_SHOT.stat.mv}</span>`),
+    ...Object.entries(drones).map(([id, choice]) => `<span class="chip ok">${escapeHtml(nameOf(id))} · ${DRONES[choice].name}</span>`),
+  ];
+  return chips.length ? `<p class="prepared"><b>For this challenge:</b> ${chips.join(' ')}</p>` : '';
+}
+
+// an Emergency Med-Patch heals instead of only being ticked: pick who, tap Heal (once per challenge)
+function renderMedPatches(entries) {
+  const members = crewMembersInRoom();
+  return entries.filter((entry) => entry.name === MED_PATCH.item).map((entry) => {
+    const carrierId = entry.key.slice(0, entry.key.indexOf(':'));
+    if (limitedUse.isUsed(state.run, entry)) return `<p class="hint">✓ ${escapeHtml(entry.holder)}'s ${MED_PATCH.item} is used (it is back in the next challenge).</p>`;
+    const selected = medPatchTargetFor(carrierId);
+    return `<div class="enemy-add med-patch"><span>${escapeHtml(entry.holder)}'s ${MED_PATCH.item} gives back ${MED_PATCH.heal} Life to</span>
+      <select data-bind-ui="medPatchTarget.${escapeHtml(carrierId)}" aria-label="Who the Med-Patch heals">${options(members.map((member) => [member.id, `${member.name}${member.damage ? ` (${member.damage} damage)` : ''}`]), selected)}</select>
+      <button class="primary" data-action="useMedPatch" data-carrier="${escapeHtml(carrierId)}">Heal</button></div>`;
+  }).join('');
+}
+
+// who the Med-Patch of this carrier will heal: the choice made, else the first crew member with damage, else the carrier
+function medPatchTargetFor(carrierId) {
+  const members = crewMembersInRoom();
+  const chosen = ui.medPatchTarget[carrierId];
+  return members.some((member) => member.id === chosen) ? chosen : (members.find((member) => member.damage > 0)?.id ?? carrierId);
+}
+
+function renderLimitedUse() {
+  const entries = limitedUse.limitedUseEntries(state.run);
+  const stimShots = renderStimShots();
+  if (entries.length === 0 && !stimShots) return '';
+  const groups = Object.entries(LIMITED_USE_LABELS).map(([frequency, label]) => {
+    const chips = entries.filter((entry) => entry.frequency === frequency && entry.name !== MED_PATCH.item).map((entry) => {
+      const isUsed = limitedUse.isUsed(state.run, entry);
+      return `<button class="limited-chip${isUsed ? ' used' : ''}" data-action="toggleLimitedUse" data-key="${escapeHtml(entry.key)}" aria-pressed="${isUsed}">
+        ${isUsed ? '✓ ' : ''}${escapeHtml(entry.name)} <small>${escapeHtml(entry.holder)}</small></button>`;
+    }).join('');
+    return chips ? `<div class="turn-crew-group"><small>${label}</small><div class="turn-chips">${chips}</div></div>` : '';
+  }).join('');
+  return `<div class="limited-use"><h4>Special abilities</h4>${groups}
+    ${stimShots ? `<div class="turn-crew-group"><small>Stim-Shot: single use, for this challenge</small>${stimShots}</div>` : ''}${renderMedPatches(entries)}
+    <p class="hint">Tap one when it is used. A new turn frees the once-per-turn ones; the once-per-challenge ones come back in the next room.</p></div>`;
+}
+
+// ---------- combat ----------
+// One attack and the defence against it (p. 20–21): the rules are in js/combat.js. Nothing here is saved; applying the damage
+// changes the Life of a crew member or of an enemy on the room's list.
+
+const OTHER_COMBATANT = { key: 'other', kind: 'other', name: 'Someone else' };
+
+function combatantsInRoom() {
+  const { run } = state;
+  const crew = run.crews.flatMap((party) => party.members.filter((member) => member.status === 'active').map((member) => ({
+    key: `crew:${member.id}`, kind: 'crew', member, name: run.crews.length > 1 ? `${member.name} (${party.name})` : member.name })));
+  const enemies = run.roomSetup.enemies.map((enemy) => ({
+    key: `enemy:${enemy.id}`, kind: 'enemy', enemy, name: enemyLogic.displayName(run.roomSetup.enemies, enemy), isOut: enemyLogic.isOutOfAction(enemy) }));
+  return { crew, enemies };
+}
+
+const combatStatOf = (combatant) => ({ crew: combatant.member?.stats.co, enemy: combatant.enemy?.combat }[combatant.kind] ?? 0);
+
+// who fights whom and with how many dice, from the choices made so far (a choice that no longer exists falls back to a default)
+function combatSetup() {
+  const { crew, enemies } = combatantsInRoom();
+  const standing = enemies.filter((enemy) => !enemy.isOut);
+  const pick = (key, fallback) => [...crew, ...standing, OTHER_COMBATANT].find((candidate) => candidate.key === key) ?? fallback;
+  const attacker = pick(ui.combat.attacker, crew[0] ?? OTHER_COMBATANT);
+  const defender = pick(ui.combat.defender, standing[0] ?? OTHER_COMBATANT);
+  const attackerWeapons = attacker.kind === 'crew' ? combat.carriedWeapons(attacker.member.equipment) : [];
+  const weapon = ui.combat.weapon === 'none' ? '' : (attackerWeapons.includes(ui.combat.weapon) ? ui.combat.weapon : (attackerWeapons[0] ?? ''));
+  const weaponProfile = WEAPON_PROFILES[weapon];
+  // a Ranged attack needs a weapon without the Close keyword (p. 21): a crew member with none, or a Close-only one, attacks within 1"
+  const mayShoot = attacker.kind !== 'crew' || weaponProfile?.reach === 'ranged';
+  const reach = !mayShoot || weaponProfile?.reach === 'close' ? 'close' : ui.combat.reach;
+  const isKinetic = attacker.kind === 'crew' ? Boolean(weaponProfile?.isKinetic) : ui.combat.isKinetic;
+  const isRangedKinetic = reach === 'ranged' && isKinetic;
+  // the Drone System (p. 37–38): chosen for this challenge in the set-up; the Targeting Drone helps a Ranged weapon at a far target
+  const { drones } = state.run.roomSetup;
+  const droneOf = (combatant) => (combatant.kind === 'crew' && gear.carries(combatant.member.equipment, 'Drone System') ? drones[combatant.member.id] : undefined);
+  const attackerDrone = droneOf(attacker);
+  const targetingDice = attackerDrone === 'targeting' && reach === 'ranged' && ui.combat.isFar ? DRONES.targeting.bonusDice : 0;
+  // what this challenge's tunings (js/preparation.js) add to the pieces each of them carries
+  const { tunings } = state.run.roomSetup;
+  const tunedAttacker = attacker.kind === 'crew' ? preparation.tunedItemsOf(tunings, attacker.member.id) : [];
+  const tunedDefender = defender.kind === 'crew' ? preparation.tunedItemsOf(tunings, defender.member.id) : [];
+  const weaponDice = weapon ? combat.weaponDiceOf(weapon, tunedAttacker) : 0;
+  const defenseWeaponDice = defender.kind === 'crew' ? combat.defenseBonusOf(defender.member.equipment, tunedDefender) : 0;
+  const defenderEdge = defender.kind === 'crew' ? crewOfMember(defender.member.id).edge : '';
+  const defaultArmor = defender.kind === 'crew' ? combat.armorOf(defender.member.equipment, { tunedItems: tunedDefender, edge: defenderEdge, isRangedKinetic }) : (defender.kind === 'enemy' ? (parseInt(defender.enemy.armor, 10) || null) : null);
+  // a hand-set armor belongs to the defender it was set for
+  const chosenArmor = ui.combat.armor !== '' && ui.combat.armorFor === defender.key ? ui.combat.armor : defaultArmor;
+  return {
+    attacker, defender, attackerWeapons, weapon, reach, hasCover: reach === 'ranged' && ui.combat.hasCover, tunedAttacker, tunedDefender,
+    mayShoot, isRangedKinetic, defenderEdge, attackerDrone, defenderDrone: droneOf(defender), targetingDice,
+    attackBaseDice: combatStatOf(attacker), weaponDice, defenseBaseDice: combatStatOf(defender), defenseWeaponDice,
+    attackDice: combatStatOf(attacker) + weaponDice + targetingDice + ui.combat.extraAttackDice,
+    defenseDice: combatStatOf(defender) + defenseWeaponDice + ui.combat.extraDefenseDice,
+    armor: weaponProfile?.ignoresArmor ? null : chosenArmor, ignoresArmor: Boolean(weaponProfile?.ignoresArmor),
+  };
+}
+
+function renderCombatantOptions(selected) {
+  const { crew, enemies } = combatantsInRoom();
+  const listOf = (combatants) => options(combatants.map((combatant) => [combatant.key, combatant.name]), selected);
+  return `${crew.length ? `<optgroup label="Crew">${listOf(crew)}</optgroup>` : ''}
+    ${enemies.some((enemy) => !enemy.isOut) ? `<optgroup label="Enemies">${listOf(enemies.filter((enemy) => !enemy.isOut))}</optgroup>` : ''}
+    ${options([[OTHER_COMBATANT.key, `${OTHER_COMBATANT.name} (set the dice by hand)`]], selected)}`;
+}
+
+function renderCombatDice(scored) {
+  return `<div class="dice small">${scored.dice.map(({ face, isSuccess }) => `<span class="die ${isSuccess ? 'hit' : ''}">${face}</span>`).join('')}</div>`;
+}
+
+function combatPoolText(label, total, parts) {
+  const breakdown = parts.filter(([, dice]) => dice > 0).map(([name, dice]) => `${name} ${dice}`).join(' + ');
+  return `<b>${label}: ${total} dice</b>${breakdown ? ` <small>(${escapeHtml(breakdown)})</small>` : ''}`;
+}
+
+// who the damage of a result hurts (null when it hurts nobody, or they are gone)
+function combatVictimOf(result) {
+  if (!result.outcome.victim) return null;
+  const victimKey = result.outcome.victim === 'defender' ? result.defenderKey : result.attackerKey;
+  const { crew, enemies } = combatantsInRoom();
+  return [...crew, ...enemies].find((candidate) => candidate.key === victimKey) ?? null;
+}
+
+// the victim's Shielding Drone, when it can step in: chosen, damage within its limit, and not used this turn (p. 37–38)
+function shieldingDroneEntryFor(victim, damage) {
+  if (victim?.kind !== 'crew' || state.run.roomSetup.drones[victim.member.id] !== 'shielding' || damage > DRONES.shielding.stopsUpTo) return null;
+  const entry = limitedUse.limitedUseEntries(state.run).find((candidate) => candidate.key === `${victim.member.id}:Drone System`);
+  return entry && !limitedUse.isUsed(state.run, entry) ? entry : null;
+}
+
+function renderCombatResult(result) {
+  const victim = combatVictimOf(result);
+  const badge = (scored) => `${scored.isCriticalSuccess ? ' <span class="chip ok">critical: doubled</span>' : ''}${scored.isCriticalFailure ? ' <span class="chip danger">critical failure</span>' : ''}`;
+  const targetText = result.targetNumber === null ? 'every even result counts' : `evens of ${result.targetNumber}+ count`;
+  const { attackerName, defenderName, outcome } = result;
+  const summary = {
+    hit: `${attackerName} hits ${defenderName}: ${result.attack.successes} − ${result.defense.successes} = ${outcome.damage} damage.`,
+    tie: `Tied at ${result.attack.successes}: nothing happens.`,
+    reflected: `${defenderName} turns the Close attack back: ${attackerName} takes ${result.defense.successes} − ${result.attack.successes} = ${outcome.damage} damage.`,
+    blocked: `${defenderName} had more successes against a Ranged attack: no damage.`,
+  }[outcome.kind];
+  let applyHtml = '';
+  if (victim && outcome.damage > 0) {
+    applyHtml = result.isApplied ? `<p class="turn-last kept">${result.isShielded ? 'The Shielding Drone stopped the damage.' : 'Damage applied.'}</p>`
+      : `<button class="primary" data-action="applyCombatDamage">Apply ${outcome.damage} damage to ${escapeHtml(victim.name)}</button>
+        ${shieldingDroneEntryFor(victim, outcome.damage) ? `<button data-action="combatDroneShield">${escapeHtml(victim.name)}'s Shielding Drone stops it (${DRONES.shielding.stopsUpTo} or less, once per turn)</button>` : ''}`;
+  }
+  return `<div class="combat-result">
+    <p>${escapeHtml(attackerName)} attacks: <b>${result.attack.successes}</b> success${result.attack.successes === 1 ? '' : 'es'} <small>(${targetText})</small>${badge(result.attack)}</p>
+    ${renderCombatDice(result.attack)}
+    <p>${escapeHtml(defenderName)} defends: <b>${result.defense.successes}</b> success${result.defense.successes === 1 ? '' : 'es'}${badge(result.defense)}</p>
+    ${renderCombatDice(result.defense)}
+    <p class="result">${escapeHtml(summary)}</p>${applyHtml}</div>`;
+}
+
+function renderCombat() {
+  if (!ui.combat.isOpen) return '<div class="row"><button data-action="toggleCombat">⚔ Combat calculator</button></div>';
+  const setup = combatSetup();
+  const { attacker, defender } = setup;
+  const weaponSelect = setup.attackerWeapons.length
+    ? `<label class="stat"><span class="stat-label">Weapon</span><select data-bind-ui="combat.weapon" data-rerender aria-label="Weapon">${options([
+      ...setup.attackerWeapons.map((name) => [name, `${name} (+${combat.weaponDiceOf(name, setup.tunedAttacker)} dice${setup.tunedAttacker.includes(name) ? ', tuned' : ''}, ${WEAPON_PROFILES[name].reach === 'close' ? 'Close only' : 'Ranged or Close'})`]),
+      ['none', 'No weapon']], setup.weapon || 'none')}</select></label>` : '';
+  const armorText = setup.ignoresArmor ? 'ignored' : (setup.armor && setup.armor > combat.NO_ARMOR_NUMBER ? `${setup.armor}+` : 'none');
+  const targetNumber = combat.attackTargetNumber({ armor: setup.armor, reach: setup.reach, hasCover: setup.hasCover });
+  const notes = [];
+  if (attacker.kind === 'enemy' && attacker.enemy.combat === null) notes.push(`${attacker.name} has no Combat stat on the list: put its dice under "Extra attack dice".`);
+  if (defender.kind === 'enemy' && defender.enemy.combat === null) notes.push(`${defender.name} has no Combat stat on the list: put its dice under "Extra defence dice".`);
+  if (setup.ignoresArmor) notes.push('This weapon ignores armor.');
+  if (setup.attacker.kind === 'crew' && !setup.mayShoot) notes.push('Ranged attacks need a weapon without the Close keyword: this one attacks within 1" only.');
+  if (setup.defender.kind === 'crew') {
+    if (gear.carries(setup.defender.member.equipment, 'Ablative Shields')) notes.push(`Ablative Shields: Armor ${ARMOR_ITEMS['Ablative Shields'].value} against Ranged Kinetic attacks only (${setup.isRangedKinetic ? 'counted here' : 'not counted: this attack is not one'}).`);
+    if (EDGE_ARMOR[setup.defenderEdge]) notes.push(`${EDGE_ARMOR[setup.defenderEdge].item} (${setup.defenderEdge}): Armor ${EDGE_ARMOR[setup.defenderEdge].value} is counted.`);
+    if (gear.carries(setup.defender.member.equipment, 'Chem-Protection Suit')) notes.push('Chem-Protection Suit: it cuts Chemical damage by 2, not combat damage.');
+  }
+  // tuned armor with no plain value of its own cannot be added up here
+  for (const item of setup.tunedDefender.filter((name) => combat.armorValueOf(name) === null)) notes.push(`${item} is tuned for this challenge: add ${TUNINGS.armor.bonus} to its armor under Armor.`);
+  if (setup.tunedDefender.some((name) => combat.armorValueOf(name) !== null)) notes.push(`Armor tuned for this challenge (+${TUNINGS.armor.bonus}) is counted.`);
+  return `<section class="combat-card">
+    <div class="row"><h3 class="grow">Combat (p. 20)</h3><button data-action="toggleCombat" aria-label="Close the combat calculator">✕</button></div>
+    <label class="stat"><span class="stat-label">Attacker</span><select data-bind-ui="combat.attacker" data-rerender aria-label="Attacker">${renderCombatantOptions(attacker.key)}</select></label>
+    ${weaponSelect}
+    <label class="stat"><span class="stat-label">Defender</span><select data-bind-ui="combat.defender" data-rerender aria-label="Defender">${renderCombatantOptions(defender.key)}</select></label>
+    <div class="row wrap reach-buttons">
+      <button data-action="setCombatReach" data-reach="close" aria-pressed="${setup.reach === 'close'}">Close (within 1")</button>
+      <button data-action="setCombatReach" data-reach="ranged" aria-pressed="${setup.reach === 'ranged'}"${setup.mayShoot && !(setup.weapon && WEAPON_PROFILES[setup.weapon].reach === 'close') ? '' : ' disabled'}>Ranged</button>
+      ${setup.reach === 'ranged' ? `<label><input type="checkbox" data-bind-ui="combat.hasCover" data-rerender${ui.combat.hasCover ? ' checked' : ''}> Defender has cover</label>` : ''}
+      ${setup.attackerDrone === 'targeting' && setup.reach === 'ranged' ? `<label><input type="checkbox" data-bind-ui="combat.isFar" data-rerender${ui.combat.isFar ? ' checked' : ''}> Target more than ${DRONES.targeting.beyondInches}" away (Targeting Drone +${DRONES.targeting.bonusDice})</label>` : ''}
+      ${setup.attacker.kind !== 'crew' && setup.reach === 'ranged' && setup.defender.kind === 'crew' && gear.carries(setup.defender.member.equipment, 'Ablative Shields')
+    ? `<label><input type="checkbox" data-bind-ui="combat.isKinetic" data-rerender${ui.combat.isKinetic ? ' checked' : ''}> Kinetic weapon</label>` : ''}
+      <button data-action="swapCombatants" aria-label="Swap attacker and defender">⇄ Swap</button>
+    </div>
+    <div class="stats three">${stepper('Extra attack', 'extraAttackDice', ui.combat.extraAttackDice, 'stepCombat')}
+      ${stepper('Extra defence', 'extraDefenseDice', ui.combat.extraDefenseDice, 'stepCombat')}
+      ${stepper('Armor', 'armor', armorText, 'stepCombat')}</div>
+    <p class="combat-pools">${combatPoolText('Attack', setup.attackDice, [['Combat', setup.attackBaseDice], [setup.tunedAttacker.includes(setup.weapon) ? 'weapon, tuned' : 'weapon', setup.weaponDice], ['Targeting Drone', setup.targetingDice], ['extra', ui.combat.extraAttackDice]])}
+      · ${targetNumber === null ? 'every even result counts' : `evens of ${targetNumber}+ count`}${setup.hasCover ? ' <small>(cover: armor +2)</small>' : ''}<br>
+      ${combatPoolText('Defence', setup.defenseDice, [['Combat', setup.defenseBaseDice], ['weapon', setup.defenseWeaponDice], ['extra', ui.combat.extraDefenseDice]])}</p>
+    ${notes.map((note) => `<p class="hint">${escapeHtml(note)}</p>`).join('')}
+    <div class="row wrap"><button class="primary" data-action="combatRoll">Roll both</button>
+      <button data-action="toggleOwnDice" aria-pressed="${ui.combat.isOwnDice}">I rolled my own dice</button></div>
+    ${ui.combat.isOwnDice ? `<div class="enemy-add"><input type="text" inputmode="numeric" placeholder="Attack: 2 5 6 10" aria-label="Attack dice you rolled" data-bind-ui="combat.ownAttackDice" value="${escapeHtml(ui.combat.ownAttackDice)}">
+      <input type="text" inputmode="numeric" placeholder="Defence: 3 8 12" aria-label="Defence dice you rolled" data-bind-ui="combat.ownDefenseDice" value="${escapeHtml(ui.combat.ownDefenseDice)}">
+      <button class="primary" data-action="combatScoreOwnDice">Score them</button></div>` : ''}
+    ${ui.combat.result ? renderCombatResult(ui.combat.result) : ''}
+  </section>`;
+}
+
+function runCombat(typedFaces) {
+  const setup = combatSetup();
+  const attackFaces = typedFaces?.attack ?? rollDice(setup.attackDice);
+  const defenseFaces = typedFaces?.defense ?? rollDice(setup.defenseDice);
+  if (attackFaces.length === 0) throw new Error('The attacker has no dice: add some under "Extra attack dice".');
+  if (defenseFaces.length === 0) throw new Error('The defender has no dice: add some under "Extra defence dice".');
+  ui.combat.result = {
+    ...combat.resolveAttack({ attackFaces, defenseFaces, armor: setup.armor, reach: setup.reach, hasCover: setup.hasCover }),
+    attackerKey: setup.attacker.key, defenderKey: setup.defender.key, attackerName: setup.attacker.name, defenderName: setup.defender.name, isApplied: false,
+  };
+}
+
+// the damage of the shown result goes to whoever it hurt: an enemy on the list loses Life, a crew member takes damage
+// (and is marked out of action in the turn tracker at 0 Life)
+function applyCombatDamage() {
+  const { result } = ui.combat;
+  if (!result || result.isApplied || !result.outcome.victim) return;
+  const victim = combatVictimOf(result);
+  if (!victim) throw new Error('That one is no longer in the room: change the damage by hand.');
+  const { damage } = result.outcome;
+  if (victim.kind === 'enemy') {
+    enemyLogic.changeLife(state.run.roomSetup.enemies, victim.enemy.id, -damage);
+    ui.noticeMessage = enemyLogic.isOutOfAction(victim.enemy) ? `${victim.name} is out of action.` : `${victim.name} has ${enemyLogic.lifeLeft(victim.enemy)} Life left.`;
+  } else {
+    const { member } = victim;
+    const lifeStat = effectiveStatOf(member, 'lf');
+    member.damage = Math.min(lifeStat, member.damage + damage);
+    const lifeLeft = lifeStat - member.damage;
+    const turns = state.run.roomSetup.turns;
+    if (lifeLeft === 0 && !turns.outIds.includes(member.id)) turnLogic.toggleOut(turns, member.id, turnSides());
+    ui.noticeMessage = lifeLeft === 0 ? `${victim.name} is out of action (marked ✕ in the turn tracker).` : `${victim.name} has ${lifeLeft} Life left.`;
+  }
+  result.isApplied = true;
+}
+
 // ---------- shell ----------
 
 // everything on screen that belonged to the previous playthrough (or to the save that was just replaced)
 function resetViewForOtherPlaythrough() {
-  Object.assign(ui, { tab: 'journey', postGame: null, exitRoll: '', mapSelected: null, confirmKey: null, boardInfo: null, boardFocus: null,
+  Object.assign(ui, { tab: 'journey', combat: blankCombat(), medPatchTarget: {}, postGame: null, exitRoll: '', mapSelected: null, confirmKey: null, boardInfo: null, boardFocus: null,
     isLoreOpen: true, isPlaythroughMenuOpen: false, isAddingCrew: false, newPlaythroughName: '', versusDraft: blankVersusDraft() });
-  roomOfBoardView = null;
+  roomTheViewBelongsTo = null;   // the next render clears what belonged to the old room, whatever its number
 }
 
 function renderPlaythroughMenu() {
@@ -1015,16 +1573,20 @@ function renderPlaythroughMenu() {
     <button class="quiet" data-action="togglePlaythroughMenu">Close</button></section>`;
 }
 
-// the info line and the lit-up kind belong to one room's map: a new room starts clean (they could name things from the last room)
-let roomOfBoardView = null;
+// What the room card shows belongs to one room, so a new room starts clean: the board's info line and lit-up kind could name things
+// from the last room, and enemy ids (e1, e2 ...) start again in every room, so a combat result, a combatant or a half-typed enemy
+// left over would point at the wrong one. The combat calculator stays open if it was.
+let roomTheViewBelongsTo = null;
 
-function resetBoardViewWhenRoomChanged() {
+function resetViewWhenRoomChanged() {
   const room = state?.run?.currentChallenge ?? null;
-  if (room !== roomOfBoardView) {
-    roomOfBoardView = room;
-    ui.boardInfo = null;
-    ui.boardFocus = null;
-    ui.isLoreOpen = true;
+  if (room !== roomTheViewBelongsTo) {
+    roomTheViewBelongsTo = room;
+    Object.assign(ui, {
+      boardInfo: null, boardFocus: null, isLoreOpen: true,
+      combat: { ...blankCombat(), isOpen: ui.combat.isOpen }, isAddingEnemy: false, enemyDraft: { name: '', life: '', combat: '' },
+      testRoll: { ...ui.testRoll, rolled: null },
+    });
   }
 }
 
@@ -1037,7 +1599,7 @@ function render() {
     </section></main>`;
     return;
   }
-  resetBoardViewWhenRoomChanged();
+  resetViewWhenRoomChanged();
   const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, versus: renderVersus, settings: renderSettings };
   appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div>
       ${navigator.onLine ? '' : '<span class="offline-chip" title="No connection: everything still works, saved here, and syncing waits">offline</span>'}
@@ -1081,6 +1643,103 @@ const actions = {
     ui.noticeMessage = `${replaced ? 'Updated' : 'Saved'} the starting crew "${recipe.name.trim()}". Use it from the Saved starting crews list for any campaign.`;
   },
   deleteCrewTemplate: ({ id }) => { store.deleteCrewTemplate(id); ui.noticeMessage = 'Deleted the saved starting crew.'; },
+  // the turn tracker (js/turns.js)
+  turnToggleDone: ({ id }) => { turnLogic.toggleDone(state.run.roomSetup.turns, id, turnSides()); },
+  turnToggleOut: ({ id }) => { turnLogic.toggleOut(state.run.roomSetup.turns, id, turnSides()); },
+  turnEnemyDone: ({ id }) => { turnLogic.toggleEnemyDone(state.run.roomSetup.turns, id, turnSides()); },
+  turnEnemyPlus: () => { turnLogic.changeEnemyActivations(state.run.roomSetup.turns, 1, turnSides()); },
+  turnEnemyMinus: () => { turnLogic.changeEnemyActivations(state.run.roomSetup.turns, -1, turnSides()); },
+  turnEnemiesDone: () => { const turns = state.run.roomSetup.turns; turnLogic.setEnemiesDone(turns, !turns.enemiesDone, turnSides()); },
+  turnRoll: () => {
+    const turns = state.run.roomSetup.turns;
+    const roll = rollD12();
+    turnLogic.resolveRoll(turns, { kept: roll >= turnLogic.rollNeeded(turns), roll }, turnSides());
+  },
+  turnKept: () => { turnLogic.resolveRoll(state.run.roomSetup.turns, { kept: true }, turnSides()); },
+  turnLost: () => { turnLogic.resolveRoll(state.run.roomSetup.turns, { kept: false }, turnSides()); },
+  // the room's enemies (js/enemies.js): changing who is standing can finish the enemies' side of the turn
+  enemyLife: ({ id, change }) => { enemyLogic.changeLife(state.run.roomSetup.enemies, id, Number(change)); },
+  enemyPip: ({ id, pip }) => { enemyLogic.setLifeFromPip(state.run.roomSetup.enemies, id, Number(pip)); },
+  fillEnemies: () => {
+    const { enemies } = enemyLogic.startingEnemies(roomLayoutFor(roomLayouts, state.run.currentChallenge), participatingCrewCount());
+    if (enemies.length === 0) throw new Error('This room\'s briefing does not list enemies with a number and a Life stat: add them by hand.');
+    replaceEnemies(enemies);
+  },
+  addEnemyGroup: ({ index }) => {
+    const group = enemyLogic.enemyGroups(roomLayoutFor(roomLayouts, state.run.currentChallenge), participatingCrewCount()).find((candidate) => candidate.index === Number(index));
+    enemyLogic.addGroups(state.run.roomSetup.enemies, [group]);
+  },
+  // preparation (js/preparation.js) and once-per-X abilities (js/limited-use.js)
+  setTuning: ({ kind, tuner, value }) => {
+    const [carrierId, item] = value === '' ? [] : value.split('|');
+    preparation.setTuning(state.run.roomSetup.tunings, kind, tuner, value === '' ? null : { carrierId, item });
+  },
+  toggleLimitedUse: ({ key }) => { limitedUse.toggleUsed(state.run, key); },
+  toggleStimShot: ({ id }) => {
+    if (state.run.roomSetup.stimmed.includes(id)) store.takeStimShotBack(state.run, id);
+    else store.useStimShot(state.run, id);
+  },
+  setDrone: ({ member, value }) => {
+    const { drones } = state.run.roomSetup;
+    if (value === '') delete drones[member];
+    else if (value in DRONES) drones[member] = value;
+    else throw new Error('Unknown drone.');
+  },
+  useMedPatch: ({ carrier }) => {
+    const { target, healed } = store.useMedPatch(state.run, carrier, medPatchTargetFor(carrier));
+    ui.noticeMessage = `${target.name} gets back ${healed} Life.`;
+  },
+  // the combat calculator (js/combat.js)
+  toggleCombat: () => { ui.combat.isOpen = !ui.combat.isOpen; },
+  setCombatReach: ({ reach }) => { ui.combat.reach = reach; ui.combat.result = null; },
+  toggleOwnDice: () => { ui.combat.isOwnDice = !ui.combat.isOwnDice; },
+  swapCombatants: () => {
+    const { attacker, defender } = combatSetup();
+    Object.assign(ui.combat, { attacker: defender.key, defender: attacker.key, weapon: '', armor: '', extraAttackDice: ui.combat.extraDefenseDice, extraDefenseDice: ui.combat.extraAttackDice, result: null });
+  },
+  stepCombat: ({ path, delta }) => {
+    if (path === 'armor') {
+      const setup = combatSetup();
+      Object.assign(ui.combat, { armor: Math.min(12, Math.max(0, (setup.armor ?? 0) + Number(delta))), armorFor: setup.defender.key });
+    } else {
+      ui.combat[path] = Math.min(20, Math.max(0, ui.combat[path] + Number(delta)));
+    }
+  },
+  combatRoll: () => { runCombat(null); },
+  combatScoreOwnDice: () => { runCombat({ attack: combat.parseFaces(ui.combat.ownAttackDice), defense: combat.parseFaces(ui.combat.ownDefenseDice) }); },
+  applyCombatDamage: () => { applyCombatDamage(); },
+  combatDroneShield: () => {
+    const { result } = ui.combat;
+    if (!result || result.isApplied) return;
+    const victim = combatVictimOf(result);
+    const entry = shieldingDroneEntryFor(victim, result.outcome.damage);
+    if (!entry) throw new Error('The Shielding Drone cannot step in: it was used this turn, or the damage is too high.');
+    limitedUse.toggleUsed(state.run, entry.key);
+    Object.assign(result, { isApplied: true, isShielded: true });
+    ui.noticeMessage = `${victim.name}'s Shielding Drone stops the damage.`;
+  },
+  stepTest: ({ path, delta }) => { ui.testRoll[path] = Math.min(20, Math.max(0, ui.testRoll[path] + Number(delta))); },
+  rollTest: () => {
+    const draft = ui.testRoll;
+    const members = crewMembersInRoom();
+    const member = members.find((candidate) => candidate.id === draft.member) ?? members[0];
+    const pool = gear.testPool(member, draft.test, { isStimmed: isStimmed(member) });
+    const target = draft.target === '' ? (pool.kind.defaultTarget ?? 0) : Number(draft.target);
+    const count = pool.total + draft.extra + (pool.hasExtraDie ? 1 : 0);
+    if (count < 1) throw new Error('No dice to roll: add some under "Extra dice".');
+    const faces = rollDice(count);
+    // the Heads-Up Display rolls one die more and discards one of the player's choice: the app discards the worst
+    const discarded = pool.hasExtraDie ? gear.discardedIndex(faces, target) : null;
+    draft.rolled = { faces, discarded, kept: faces.filter((_, index) => index !== discarded), target, needed: draft.needed, name: member.name, testLabel: pool.kind.label };
+  },
+  startAddEnemy: () => { ui.isAddingEnemy = true; },
+  cancelAddEnemy: () => { Object.assign(ui, { isAddingEnemy: false, enemyDraft: { name: '', life: '', combat: '' } }); },
+  addEnemyByHand: () => {
+    enemyLogic.addEnemyByHand(state.run.roomSetup.enemies, { name: ui.enemyDraft.name, life: ui.enemyDraft.life, combat: ui.enemyDraft.combat });
+    Object.assign(ui, { isAddingEnemy: false, enemyDraft: { name: '', life: '', combat: '' } });
+  },
+  clearEnemies: () => { replaceEnemies([]); },
+  turnNext: () => { turnLogic.nextTurn(state.run.roomSetup.turns, turnSides()); },
   // versus (skirmish) matches: see renderVersus
   versusRollChallenge: () => {
     const roll = rollD12();
@@ -1145,16 +1804,33 @@ const actions = {
     state.run.crews[Number(crew)].members.push(store.createMember({
       name: 'New member', type: 'Soldier', isCommander: false, stats: store.zeroStats() }));
   },
-  removeMember: ({ crew, index }) => { state.run.crews[Number(crew)].members.splice(Number(index), 1); },
+  removeMember: ({ crew, index }) => { store.removeMember(state.run, Number(crew), Number(index)); },
   takeAdvancement: ({ crew, index, stat }) => { store.takeAdvancement(state.run.crews[Number(crew)].members[Number(index)], stat); },
 
-  openPostGame: () => { ui.postGame = { downed: {}, bonusXp: {}, agendaPartFoundByCrew: {}, legacyEarned: false, note: '' }; },
+  // everyone put out of action in this room is ticked already: marked ✕ in the turn tracker, or at 0 Life (the combat calculator marks both)
+  openPostGame: () => {
+    const { turns } = state.run.roomSetup;
+    const downed = {};
+    for (const member of store.allMembers(state.run)) {
+      const isDown = turns.outIds.includes(member.id) || (effectiveStatOf(member, 'lf') > 0 && member.damage >= effectiveStatOf(member, 'lf'));
+      if (member.status === 'active' && isDown) downed[member.id] = { roll: '', stat: 'lf', deadQuestion: '' };
+    }
+    ui.postGame = { downed, bonusXp: {}, agendaPartFoundByCrew: {}, legacyEarned: false, note: '', rerollsUsed: 0 };
+  },
   cancelPostGame: () => { ui.postGame = null; },
   toggleDowned: ({ id }) => {
     if (ui.postGame.downed[id]) delete ui.postGame.downed[id];
     else ui.postGame.downed[id] = { roll: '', stat: 'lf', deadQuestion: '' };
   },
-  rollInjury: ({ id }) => { ui.postGame.downed[id].roll = rollD12() + rollD12(); },
+  rollInjury: ({ id }) => { ui.postGame.downed[id].roll = rollTwoD12(); },
+  rerollInjury: ({ id }) => {
+    Object.assign(ui.postGame.downed[id], { roll: rollTwoD12(), isRerolled: true });
+    ui.postGame.rerollsUsed += 1;
+  },
+  // one roll for each ticked crew member who has none yet (a roll already typed or made stays)
+  rollAllInjuries: () => {
+    for (const entry of Object.values(ui.postGame.downed)) if (entry.roll === '') entry.roll = rollTwoD12();
+  },
   applyPostGame: () => { store.completeCurrentChallenge(state, ui.postGame); ui.postGame = null; ui.exitRoll = ''; },
 
   rollTerrain: () => {
@@ -1187,7 +1863,14 @@ const actions = {
     ui.noticeMessage = `Deleted. Now playing: ${store.activePlaythroughName()}.`;
   },
   toggleBoardFocus: ({ kind }) => { ui.boardFocus = ui.boardFocus === kind ? null : kind; },
-  beginChallenge: () => { state.run.roomSetup.isMissionStarted = true; },
+  beginChallenge: () => {
+    state.run.roomSetup.isMissionStarted = true;
+    // the list from the briefing, when the private room text is loaded (otherwise by hand, see renderEnemyListTools);
+    // going back to the set-up and in again keeps the list, and the damage on it
+    if (state.run.roomSetup.enemies.length === 0) {
+      replaceEnemies(enemyLogic.startingEnemies(roomLayoutFor(roomLayouts, state.run.currentChallenge), participatingCrewCount()).enemies);
+    }
+  },
   reopenRoomSetup: () => { state.run.roomSetup.isMissionStarted = false; },
 
   rollExit: () => { ui.exitRoll = rollD12(); },
@@ -1322,7 +2005,7 @@ function handleClick(event) {
   ui.confirmKey = null;
   try {
     actions[element.dataset.action](element.dataset);
-    if (!unreadableSaveMessage) store.saveState();
+    if (!unreadableSaveMessage) settleAndSave();
   } catch (error) {
     ui.errorMessage = error.message;
   }
@@ -1344,12 +2027,18 @@ function loadTemplateIntoForm(id) {
 }
 
 function applyInput(element) {
+  if (element.dataset.inputAction) {
+    actions[element.dataset.inputAction]({ ...element.dataset, value: element.value });
+    settleAndSave();
+    render();
+    return;
+  }
   const statePath = element.dataset.bind;
   const uiPath = element.dataset.bindUi;
   if (element.dataset.appendTo && element.value) {
     const path = element.dataset.appendTo;
     setAtPath(state, path, [getAtPath(state, path), element.value].filter(Boolean).join('\n'));
-    store.saveState();
+    settleAndSave();
     render();
     return;
   }
@@ -1359,7 +2048,7 @@ function applyInput(element) {
   if (statePath) {
     setAtPath(state, statePath, value);
     if (state.run) store.recordDeathLocations(state.run);
-    store.saveState();
+    settleAndSave();
   } else {
     setAtPath(ui, uiPath, value);
   }

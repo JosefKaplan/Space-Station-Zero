@@ -70,8 +70,83 @@ export const EQUIPMENT_CATEGORIES = {
   advancedTechnology: { name: 'Advanced Technology', page: '37–38',
     items: ['Ablative Shields', 'Jump Boots', 'Drone System', 'Point-to-Point Teleporter', 'Heads-Up Display'] },
 };
-export const WEAPONS = ['Sidearm', 'Melee Weapon', 'Energy Melee Weapon', 'Energy Missile Weapon',
-  'Heavy Kinetic Missile Weapon', 'Heavy Melee Weapon'];
+// What each weapon adds to a Combat Challenge Test, in dice (p. 36–37), whether it can only attack within 1" ("close"), and two special
+// effects in short: it ignores the target's armor, or it adds its dice to the wearer's defence rolls too.
+export const WEAPON_PROFILES = {
+  'Sidearm': { reach: 'ranged', bonusDice: 2 },
+  'Melee Weapon': { reach: 'close', bonusDice: 2 },
+  'Energy Melee Weapon': { reach: 'close', bonusDice: 3, ignoresArmor: true },
+  'Energy Missile Weapon': { reach: 'ranged', bonusDice: 3 },
+  'Heavy Kinetic Missile Weapon': { reach: 'ranged', bonusDice: 3, isKinetic: true },
+  'Heavy Melee Weapon': { reach: 'close', bonusDice: 3, isKinetic: true, addsToDefense: true },
+};
+export const WEAPONS = Object.keys(WEAPON_PROFILES);
+
+// Pieces of armor (p. 36–38) with their armor value (the number an even result must reach). `onlyAgainst`: it counts against that kind of
+// attack only (Ablative Shields: Ranged Kinetic ones). A piece with no value (the Chem-Protection Suit cuts Chemical damage instead)
+// has its effect set by hand.
+export const ARMOR_ITEMS = {
+  'Armored Jacket': { value: 4 },
+  'Ablative Shields': { value: 8, onlyAgainst: 'rangedKinetic' },
+  'Chem-Protection Suit': { value: null },
+};
+// An edge that gives the whole crew armor (p. 34): Armored Force, Power Armor with Armor 6
+export const EDGE_ARMOR = { 'Armored Force': { item: 'Power Armor', value: 6 } };
+
+// The kinds of Challenge Test that equipment changes (p. 36–38). `covers` lists the kinds of bonus that apply to a test of this kind:
+// a Scanner helps a Reaction test to spot a Hidden enemy, a Hyper-Scanner helps every Reaction test.
+export const TEST_KINDS = {
+  reaction: { label: 'Reaction', stat: 're', covers: ['reaction'] },
+  spotHidden: { label: 'Reaction: spot a Hidden enemy', stat: 're', covers: ['reaction', 'spotHidden'] },
+  life: { label: 'Life', stat: 'lf', covers: ['life'] },
+  lifeVsChemical: { label: 'Life: against a Chemical', stat: 'lf', covers: ['life', 'lifeVsChemical'] },
+  intelligence: { label: 'Intelligence', stat: 'in', covers: ['intelligence'] },
+  alienTech: { label: 'Intelligence: Alien Technology', stat: 'in', covers: ['intelligence', 'alienTech'] },
+  medicalAttention: { label: 'Medical Attention (Intelligence, 6+)', stat: 'in', covers: ['intelligence', 'medicalAttention'], defaultTarget: 6 },
+};
+
+// What a piece of equipment adds, in numbers: dice to a kind of test, to a stat (always, or when a test is of a kind), an extra die to
+// roll and one to discard on tests of a kind, a cut in Chemical damage. The weapons and armor are in WEAPON_PROFILES and ARMOR_ITEMS.
+export const EQUIPMENT_EFFECTS = {
+  'Scanner': { testDice: { spotHidden: 1 } },
+  'Medi-Bag': { testDice: { medicalAttention: 2 } },
+  'Antitoxin': { testDice: { lifeVsChemical: 2 } },
+  'Hazard Suit': { testDice: { life: 1 } },
+  'Hyper-Scanner': { testDice: { reaction: 2 } },
+  'Advanced Tech Kit': { testDice: { alienTech: 3 } },
+  'Mini-Lab Kit': { testDice: { intelligence: 1 } },
+  'Heads-Up Display': { statOnTest: { spotHidden: { re: 2 } }, extraDieOnTest: 'reaction' },
+  'Jump Boots': { stat: { mv: 2 }, flies: true },
+  'Chem-Protection Suit': { chemicalDamageCut: 2 },
+};
+
+// Stim-Shot (p. 37): single use, for one challenge. Emergency Med-Patch: once per challenge, heals within 1 inch.
+export const STIM_SHOT = { item: 'Stim-Shot', stat: { lf: 2, mv: 2 } };
+export const MED_PATCH = { item: 'Emergency Med-Patch', heal: 3 };
+
+// The Drone System (p. 37–38): one of two drones. The Shielding Drone stops damage up to `stopsUpTo` from a combat attack (once per
+// turn); the Targeting Drone adds `bonusDice` to Ranged weapon attacks at a target more than `beyondInches` away.
+export const DRONES = {
+  shielding: { name: 'Shielding Drone', stopsUpTo: 4 },
+  targeting: { name: 'Targeting Drone', bonusDice: 2, beyondInches: 3 },
+};
+
+// Start-of-challenge tunings (p. 32–33): the ability that grants one, and how much it adds for that challenge only.
+// A weapon's bonus dice go up by 1; a piece of armor's value goes up by 2.
+export const TUNINGS = {
+  weapon: { ability: 'Weapon Tuning', bonus: 1, page: 32 },
+  armor: { ability: 'Armor Tuning', bonus: 2, page: 33 },
+};
+
+// How often an ability, edge or piece of equipment can be used (its name must appear in the member's abilities or equipment, or be the
+// crew's edge): once per turn, once per challenge or once per game. What each does is in the book (and the private notes).
+export const LIMITED_USE = {
+  'Combat Specialist': 'turn', 'Hive Mind': 'turn', 'Time Masters': 'turn', 'Chemically Enhanced': 'turn',
+  'Logistics Expert': 'turn', 'Sneaky Scoundrel': 'turn', 'Drone System': 'turn',
+  Bypass: 'challenge', 'Emergency Med-Patch': 'challenge', 'Determined Leader': 'challenge',
+  'Survival Specialist': 'game',
+};
+export const LIMITED_USE_LABELS = { turn: 'Once per turn', challenge: 'Once per challenge', game: 'Once per game' };
 
 // An edge that grants more starting pieces than the base allowance, and from which categories they may come (p. 34–36)
 const EDGE_EXTRA_STARTING_EQUIPMENT = { Smugglers: { count: 3, categories: ['weaponry', 'advancedTechnology'] } };
@@ -225,6 +300,11 @@ export const SKIRMISH_REMINDERS = [
 
 // d12 needed to keep the initiative for the 2nd, 3rd and every later activation in a turn (p. 14)
 const RETAIN_INITIATIVE_ROLLS = [6, 10, 12];
+
+// the d12 result needed to keep the initiative after a side's `activations`-th activation of the turn (p. 13–14)
+export function initiativeRollNeeded(activations) {
+  return RETAIN_INITIATIVE_ROLLS[Math.min(Math.max(activations, 1), RETAIN_INITIATIVE_ROLLS.length) - 1];
+}
 
 // Short reminders in this app's own words, not the rulebook's; the pages have the full rules and examples.
 export const DICE_HELP = [
