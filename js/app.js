@@ -1613,6 +1613,31 @@ function render() {
     </main>
     <nav>${TABS.map(([tab, label]) => `<button data-action="showTab" data-tab="${tab}" class="${ui.tab === tab ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
   refreshBoardInteractions();
+  markWhatIsNew();
+}
+
+// Animations. The page is rebuilt on every click, so a plain CSS animation would replay each time: only an element that was not
+// there (or not in this state) before the click gets the class `is-new`, and css/style.css animates that. A change of view
+// (another tab, another room, the set-up to the room) fades the whole view in instead, without marking every piece of it.
+const ANIMATED_SELECTORS = ['.turn-roll', '.turn-last', '.turn-head h3', '.initiative', '.turn-chip', '.limited-chip', '.enemy-row', '.enemy-life', '.pip',
+  '.dice', '.combat-result', '.prepared', '.error', '.notice', '.advancement'];
+let animationKeysOfLastRender = null;
+let viewOfLastRender = null;
+
+function markWhatIsNew() {
+  const view = `${ui.tab}|${state?.run?.currentChallenge ?? ''}|${state?.run?.roomSetup.isMissionStarted ?? ''}|${Boolean(ui.postGame)}`;
+  const keys = new Set();
+  const isSameView = view === viewOfLastRender && animationKeysOfLastRender !== null;
+  for (const selector of ANIMATED_SELECTORS) {
+    appElement.querySelectorAll(selector).forEach((element, index) => {
+      const key = `${selector}|${index}|${element.className}|${element.textContent}`;
+      keys.add(key);
+      if (isSameView && !animationKeysOfLastRender.has(key)) element.classList.add('is-new');
+    });
+  }
+  if (!isSameView && viewOfLastRender !== null) appElement.querySelector('main')?.classList.add('view-enter');
+  animationKeysOfLastRender = keys;
+  viewOfLastRender = view;
 }
 
 const actions = {
