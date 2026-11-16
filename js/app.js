@@ -2,7 +2,7 @@
 // (a re-render while typing would drop focus and swallow the next tap).
 import {
   ABILITY_PAGES, AGENDAS, AGENDA_ROLL_TARGET, BASE_STATS_BY_CREW_SIZE, CHALLENGES, COMMANDER_BONUS_XP_PER_CHALLENGE,
-  COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, CREW_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_COMMANDER_XP_TOLERANCE, SKIRMISH_REMINDERS, SKIRMISH_TURNS, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
+  COMMANDER_FREE_STAT_POINTS, COOP_REMINDERS, challengeName, CREW_TYPES, SKIRMISH_CHALLENGES, SKIRMISH_COMMANDER_XP_TOLERANCE, SKIRMISH_REMINDERS, SKIRMISH_TURNS, DICE_HELP, EDGES, EQUIPMENT_CATEGORIES, INJURY_ROLL_MAX, INJURY_ROLL_MIN,
   LEGACY_PAGE_REFERENCE, SHIP_TYPES, STARTING_OTHER_EQUIPMENT, STAT_KEYS, STAT_LABELS, WEAPONS, startingGearRules,
   XP_PER_SURVIVED_CHALLENGE, exitForRoll, injuryOutcomeForRoll, injuryRollRangeLabel,
 } from './data.js';
@@ -174,7 +174,7 @@ function renderJourney() {
 
   return `<section class="card room">
       <p class="eyebrow">Challenge ${number} <span class="chip ${isCleared ? 'ok' : 'warn'}">${isCleared ? 'cleared' : 'in progress'}</span></p>
-      <h2>${escapeHtml(challenge.name)}</h2>
+      <h2>${escapeHtml(challengeName(number))}</h2>
       <p class="page-ref">Rulebook p. ${challenge.page}</p>
       ${isCleared ? '' : renderRoomTable(number, { isSettingUp: false })}
       ${renderReminders(reminders)}
@@ -216,7 +216,9 @@ function enemyCaptionsByArea(roomLayout) {
 
 function renderEnemyLine(enemy) {
   const where = enemy.areas ? enemyShares(enemy).map(({ area, count }) => `${area}: ${count}`).join(' · ') : enemy.where;
-  const total = enemy.perCrew ? `${enemy.perCrew * participatingCrewCount()}× ` : '';
+  // "per crew" numbers scale with the crews; a fixed plain number above 1 ("2" Gun Turrets) is shown as it is
+  const fixedCount = /^\d+$/.test(enemy.count) && Number(enemy.count) > 1 ? `${enemy.count}× ` : '';
+  const total = enemy.perCrew ? `${enemy.perCrew * participatingCrewCount()}× ` : fixedCount;
   return `<li><b>${total}${escapeHtml(enemy.name)}</b> — ${escapeHtml(where)}${enemy.hidden ? ' <span class="chip warn">hidden</span>' : ''}
     ${enemy.when ? `<br><i>${escapeHtml(enemy.when)}</i>` : ''}${enemy.hidden && enemy.areas ? '<br><i>placed once revealed</i>' : ''}</li>`;
 }
@@ -355,7 +357,7 @@ function renderPartyLine() {
 function renderRoomSetup(number, challenge, reminders) {
   return `<section class="card room">
       <p class="eyebrow">Challenge ${number} <span class="chip warn">setting up</span></p>
-      <h2>${escapeHtml(challenge.name)}</h2>
+      <h2>${escapeHtml(challengeName(number))}</h2>
       <p class="page-ref">Read the room's opening on p. ${challenge.page}, then set up the table.</p>
       ${renderRoomTable(number, { isSettingUp: true })}
       ${renderReminders(reminders)}
@@ -442,9 +444,13 @@ function renderPostGame(challenge) {
       </div>
       ${downed ? `<div class="row injury">
         <button data-action="rollInjury" data-id="${memberId}">Roll 2d12</button>
-        <input type="number" min="${INJURY_ROLL_MIN}" max="${INJURY_ROLL_MAX}" inputmode="numeric" placeholder="${INJURY_ROLL_MIN}–${INJURY_ROLL_MAX}" data-bind-ui="postGame.downed.${memberId}.roll" data-outcome-element="outcome-${memberId}" value="${escapeHtml(downed.roll)}">
+        <input type="number" min="${INJURY_ROLL_MIN}" max="${INJURY_ROLL_MAX}" inputmode="numeric" placeholder="${INJURY_ROLL_MIN}–${INJURY_ROLL_MAX}" data-bind-ui="postGame.downed.${memberId}.roll" data-outcome-element="outcome-${memberId}" data-dead-question-element="dead-question-${memberId}" value="${escapeHtml(downed.roll)}">
         <select data-bind-ui="postGame.downed.${memberId}.stat" title="Stat to raise on a roll of ${oneStatUpRange}">${options(STAT_KEYS.map((stat) => [stat, `+${STAT_LABELS[stat]} on ${oneStatUpRange}`]), downed.stat)}</select>
-      </div><p class="outcome" id="outcome-${memberId}">${escapeHtml(outcome?.label ?? '')}</p>` : ''}
+      </div><p class="outcome" id="outcome-${memberId}">${escapeHtml(outcome?.label ?? '')}</p>
+      <div class="dead-question" id="dead-question-${memberId}"${outcome?.key === 'hidden' ? '' : ' hidden'}>
+        <p class="hint">A roll of 2 is "Dead?": read p. 114, #1 now, then say what it decided.</p>
+        <select aria-label="What p. 114, #1 decided" data-bind-ui="postGame.downed.${memberId}.deadQuestion">${options([['', '— what did the page decide? —'], ['dead', 'They died'], ['survived', 'They survived (apply any penalty on the Crew tab)']], downed.deadQuestion)}</select>
+      </div>` : ''}
     </div>`;
   };
   const crewsHtml = run.crews.map((crew) => {
@@ -505,7 +511,7 @@ function renderMapRoomDetail(number, isGhost) {
   const logEntries = isGhost ? [] : run.log.filter((entry) => entry.challenge === number);
   return `<div class="map-detail">
     <p class="eyebrow">Challenge ${number} <span class="chip">${status}</span></p>
-    <p><b>${escapeHtml(challenge.name)}</b> <span class="page-ref">p. ${challenge.page}</span></p>
+    <p><b>${escapeHtml(challengeName(number))}</b> <span class="page-ref">p. ${challenge.page}</span></p>
     ${doors.length ? `<ul class="plain doors">${doors.map((door) => `<li>${door}</li>`).join('')}</ul>` : ''}
     ${fallenHere.length ? `<ul class="plain fallen">${fallenHere.map((entry) => `<li>✕ ${escapeHtml(entry.name)} <small>${escapeHtml(entry.crewName)}</small></li>`).join('')}</ul>` : ''}
     ${logEntries.length ? `<ul class="plain room-log">${logEntries.map((entry) => `<li class="${entry.isNote ? 'note' : ''}">${escapeHtml(entry.text)}</li>`).join('')}</ul>` : ''}
@@ -1034,6 +1040,7 @@ function render() {
   resetBoardViewWhenRoomChanged();
   const views = { journey: renderJourney, crew: renderCrew, log: renderLog, dice: renderDice, versus: renderVersus, settings: renderSettings };
   appElement.innerHTML = `<header><img src="icons/icon.svg" alt="" width="48" height="48"><div><h1>Captain's Log</h1><span>Space Station Zero</span></div>
+      ${navigator.onLine ? '' : '<span class="offline-chip" title="No connection: everything still works, saved here, and syncing waits">offline</span>'}
       <button class="playthrough-button" data-action="togglePlaythroughMenu" aria-expanded="${ui.isPlaythroughMenuOpen}" aria-label="Playthroughs">
         <small>Playthrough</small>${escapeHtml(store.activePlaythroughName())} ▾</button></header>
     <main>
@@ -1145,7 +1152,7 @@ const actions = {
   cancelPostGame: () => { ui.postGame = null; },
   toggleDowned: ({ id }) => {
     if (ui.postGame.downed[id]) delete ui.postGame.downed[id];
-    else ui.postGame.downed[id] = { roll: '', stat: 'lf' };
+    else ui.postGame.downed[id] = { roll: '', stat: 'lf', deadQuestion: '' };
   },
   rollInjury: ({ id }) => { ui.postGame.downed[id].roll = rollD12() + rollD12(); },
   applyPostGame: () => { store.completeCurrentChallenge(state, ui.postGame); ui.postGame = null; ui.exitRoll = ''; },
@@ -1357,7 +1364,9 @@ function applyInput(element) {
     setAtPath(ui, uiPath, value);
   }
   if (element.dataset.outcomeElement) {
-    document.getElementById(element.dataset.outcomeElement).textContent = injuryOutcomeForRoll(value)?.label ?? '';
+    const outcome = injuryOutcomeForRoll(value);
+    document.getElementById(element.dataset.outcomeElement).textContent = outcome?.label ?? '';
+    document.getElementById(element.dataset.deadQuestionElement).hidden = outcome?.key !== 'hidden';
   }
   if ('exitRollPreview' in element.dataset) {
     document.getElementById('exit-roll-preview').textContent = exitRollPreviewText(CHALLENGES[state.run.currentChallenge], value);
@@ -1506,6 +1515,12 @@ if (!unreadableSaveMessage) {
   window.addEventListener('online', async () => useSyncedData(await cloud.syncNow({ force: true })));
   // a second device may have changed something while this one stays open
   setInterval(async () => { if (document.visibilityState === 'visible') useSyncedData(await cloud.syncNow()); }, SYNC_PULL_INTERVAL_MS);
+}
+// offline use (sw.js keeps the app's own files): say when there is no connection, and start syncing again when it is back
+window.addEventListener('offline', () => { if (!isTypingInAField()) render(); });
+window.addEventListener('online', () => { if (!isTypingInAField()) render(); });
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch((error) => console.error(`Offline use is off: the service worker could not start (${error.message}).`));
 }
 render();
 if (!unreadableSaveMessage) cloud.syncNow({ force: true }).then(useSyncedData).then(pullPrivateFilesFromDatabase).catch(() => { /* optional: the sync card shows the real errors */ });

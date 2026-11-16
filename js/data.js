@@ -325,7 +325,7 @@ export const CHALLENGES = {
   8: { name: 'Disused Bay', page: 63, map: [2, 3],
     reminders: ['If you earn the Knowledge Shard: p. 114, #4.'],
     exits: [{ label: 'Broken Elevator Tube (Going Down)', to: 7 }, { label: 'Rusted Conveyor Belt Tunnel', to: 10, via: [[4, 3]] }] },
-  9: { name: 'Chemical Lab', page: 65, map: [3, 5.5], exits: [{ label: 'Broken Doors', to: 7, via: [[3, 4]] }, { label: 'Ventilation System', to: 11, via: [[3, 7]] }] },
+  9: { name: 'Chemical Lab', page: 65, map: [3, 5.5], turnLimit: 4, exits: [{ label: 'Broken Doors', to: 7, via: [[3, 4]] }, { label: 'Ventilation System', to: 11, via: [[3, 7]] }] },
   10: { name: 'Smelting Factory', page: 67, map: [4, 4], exits: [{ label: 'Emergency Exit', to: 12, via: [[4, 6]] }, { label: 'Rusted Conveyor Belt Tunnel', to: 8, via: [[4, 3]] }] },
   11: { name: 'Greenhouse', page: 69, map: [2, 7], agendas: ['rescue', 'medicine'],
     exits: [{ label: 'Broken Lift Tube Up', to: 12 }, { label: 'Broken Lift Tube Down', to: 13 }, { label: 'Ventilation System', to: 9, via: [[3, 7]] }] },
@@ -353,6 +353,13 @@ export const CHALLENGES = {
     exits: [{ label: 'Bay Door', to: 24 }] },
   24: { name: 'Master System', page: 99, map: [2, 14.5], reminders: ['Read p. 116, #10.'] },
 };
+
+// Three rooms are all called "Disused Bay" (8, 15 and 19): wherever a room's name stands without its number it gets one
+export function challengeName(number) {
+  const { name } = CHALLENGES[number];
+  const isShared = Object.entries(CHALLENGES).some(([other, challenge]) => Number(other) !== number && challenge.name === name);
+  return isShared ? `${name} (${number})` : name;
+}
 
 export const LEGACY_PAGE_REFERENCE = 'p. 116, #9';
 export const MAX_LEGACY_COUNT = 2;

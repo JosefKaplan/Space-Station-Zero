@@ -40,6 +40,10 @@ Open the GitHub Pages URL of this repo. Everything is stored in your browser (`l
 use **Export** to back up or move all playthroughs to another device, **Import** to load them (a backup replaces everything; the save of a single campaign is added as a new playthrough).
 Or set up the optional sync below and your saves follow you to every device.
 
+After one visit the app also works **offline** (a small service worker, `sw.js`, keeps the app's own files) and can be
+**installed**: in the browser's menu choose "Install app" or "Add to Home Screen". An online visit always gets the newest version;
+a chip in the header says when there is no connection, and syncing waits until it is back.
+
 ## Optional: sync your saves (Supabase)
 
 Without this, saves live in one browser only and a cleared browser loses them. With it, every playthrough is also kept in

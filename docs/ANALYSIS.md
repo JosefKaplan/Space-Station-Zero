@@ -13,7 +13,7 @@ there is bookkeeping. The table-top part (movement, combat, dice) needs no app; 
 | Current room and exits | p. 43, each challenge | Exits are fixed doors *or* a d12 table, different per room |
 | Backtracking | p. 43 | Cleared rooms can be walked through without replaying — you need to know which are cleared |
 | No Return | p. 43 | Some rooms seal everything before them |
-| Injuries & death | p. 40 | 2d12 table per downed crew member, results change stats permanently or bench someone for one room |
+| Injuries & death | p. 40 | 2d12 table per downed crew member, results change stats permanently or bench someone for one room. A roll of 2 only says "Dead?" and points to a hidden page, so the player must say what that page decided (died or survived) before the room can be cleared |
 | Experience | p. 41 | +1 per survivor, +1 commander, room bonuses; two different advancement tables |
 | Secondary agenda | p. 38 | Two-part quests found in specific rooms, on a d12 5+; progress carries over to your *next* crew |
 | Knowledge shards | p. 8 | Stat bonus plus a pointer into the hidden pages |
@@ -342,3 +342,15 @@ carried in `local/crew-rules.json` as `skirmishes`) and shown in a folded sectio
 **Not covered.** Vat wake-up progress and the turrets' and mutants' own activations are played at the table, not tracked.
 Players are people at the table, not campaign crews: the match does not track life or equipment. With three players Base Attack
 is split one attacker against two defenders, because the book only describes one or two of each.
+
+## 15. Offline use and installing
+
+`manifest.webmanifest` (name, colours, icons 192/512 PNG plus the SVG) makes the app installable; `sw.js`, registered by `js/app.js`,
+makes it work offline. The worker is **network first**: every request for one of this site's own files tries the network (revalidating,
+with a 4 s timeout so a weak signal does not hold the app up), keeps the answer, and falls back to the kept copy when the network does
+not answer. So an online visit always gets the newest files (there is no version number to bump) and an offline visit gets the files
+of the last online visit, which were all fetched together. It never touches another origin (the sync server) or the private
+`local/` files. `FILES_TO_KEEP_AT_INSTALL` in `sw.js` lists the files kept at the first visit so that the very first offline start works;
+a new module should be added there, but forgetting it is harmless (it is kept the first time it loads). The header shows an "offline"
+chip when the browser reports no connection. Saves were always in `localStorage`, so editing offline needs nothing else; the sync
+(`js/cloud-sync.js`) simply waits for the connection.

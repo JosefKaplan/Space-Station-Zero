@@ -18,7 +18,7 @@
 | 6 | Pod 6 | 57 | **NR** d12: 1–3→7, 4–6→10, 7–9→13, 10–12→15 | Limit: end of turn 5. Pointer p.114 #2 (when the book says so) |
 | 7 | Science Lab | 60 | →8, →15, →9 | Agenda: Data, Biology |
 | 8 | Disused Bay | 63 | →7, →10 | Shard: p.114 #4 |
-| 9 | Chemical Lab | 65 | →7, →11 | |
+| 9 | Chemical Lab | 65 | →7, →11 | Limit: end of turn 4 |
 | 10 | Smelting Factory | 67 | →12, →8 | |
 | 11 | Greenhouse | 69 | →12, →13, →9 | Agenda: Rescue, Medicine |
 | 12 | Environmental Control Room | 72 | →11, →15, →10 | Agenda: Biology, Tech |

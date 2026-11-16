@@ -638,12 +638,15 @@ export function recordDeathLocations(run) {
   }
 }
 
-function applyInjury(member, outcome, chosenStat) {
+// A roll of 2 only says "Dead?" and sends the player to a page of the book (p. 114, #1), which decides. The app cannot know,
+// so the player says what the page decided (`deadQuestion`: 'dead' or 'survived'); a survivor changes nothing here, any
+// penalty the page adds is applied by hand on the Crew tab.
+function applyInjury(member, outcome, chosenStat, deadQuestion) {
   const changeAllStats = (delta) => {
     for (const stat of STAT_KEYS) member.stats[stat] = Math.max(0, member.stats[stat] + delta);
   };
   switch (outcome.key) {
-    case 'hidden':
+    case 'hidden': if (deadQuestion === 'dead') member.status = 'dead'; break;
     case 'dead': member.status = 'dead'; break;
     case 'allStatsDown': changeAllStats(-1); break;
     case 'recovering': member.status = 'recovering'; break;
@@ -667,12 +670,18 @@ export function completeCurrentChallenge(state, draft) {
   const injuries = participants.filter((member) => draft.downed[member.id]).map((member) => {
     const outcome = injuryOutcomeForRoll(Number(draft.downed[member.id].roll));
     if (!outcome) throw new Error(`${member.name} needs an Injuries & Death roll between ${INJURY_ROLL_MIN} and ${INJURY_ROLL_MAX}.`);
-    return { member, outcome, chosenStat: draft.downed[member.id].stat };
+    const deadQuestion = draft.downed[member.id].deadQuestion;
+    if (outcome.key === 'hidden' && !['dead', 'survived'].includes(deadQuestion)) {
+      throw new Error(`${member.name} rolled "Dead?": read p. 114, #1, then say whether they died or survived.`);
+    }
+    return { member, outcome, chosenStat: draft.downed[member.id].stat, deadQuestion };
   });
 
-  const injurySummaries = injuries.map(({ member, outcome, chosenStat }) => {
-    applyInjury(member, outcome, chosenStat);
-    return `${member.name}: ${outcome.label}`;
+  const injurySummaries = injuries.map(({ member, outcome, chosenStat, deadQuestion }) => {
+    applyInjury(member, outcome, chosenStat, deadQuestion);
+    return outcome.key === 'hidden'
+      ? `${member.name}: Dead? (p. 114, #1) — ${deadQuestion === 'dead' ? 'dead' : 'survived'}`
+      : `${member.name}: ${outcome.label}`;
   });
   recordDeathLocations(run);
 

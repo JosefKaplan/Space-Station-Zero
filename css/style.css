@@ -405,3 +405,12 @@ button[disabled] { opacity: .5; cursor: progress; }
 .counter button { min-width: 48px; min-height: 48px; padding: 0; font-size: 20px; }
 ol.seating { padding-left: 0; list-style: none; }
 .seating li { padding: 6px 0; }
+
+/* a roll of 2 on the injury table: the book decides whether they died */
+.dead-question { border: 2px dashed var(--accent); border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+.dead-question[hidden] { display: none; }
+.dead-question .hint { margin: 0 0 8px; }
+
+/* no connection (sw.js keeps the app working) */
+.offline-chip { align-self: center; display: inline-block; margin: 0; padding: 2px 8px; border: 2px solid var(--ink); border-radius: 4px; background: var(--danger); color: var(--ink);
+  font: 700 11px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
